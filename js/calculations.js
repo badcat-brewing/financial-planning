@@ -868,6 +868,23 @@ function simulateDrawdown(data, scenario, stressEvents) {
     var livingExpenses = totalExpenses; // preserve pre-tax living costs
     var netNeed = totalExpenses + totalContributions - totalIncome;
 
+    // RMD surplus reinvestment: when income (RMDs + SS) exceeds expenses,
+    // deposit the excess into a bond account (or savings if no bond exists)
+    var rmdSurplusDeposited = 0;
+    if (netNeed < 0 && totalRmd > 0) {
+      var surplus = Math.abs(netNeed);
+      var bondAcct = data.accounts.find(function(a) {
+        return (a.asset_class || ACCOUNT_TYPE_ASSET_CLASS[a.type]) === 'bond';
+      });
+      var depositAcct = bondAcct || data.accounts.find(function(a) {
+        return a.type === 'savings';
+      });
+      if (depositAcct) {
+        accountBalances[depositAcct.name] += surplus;
+        rmdSurplusDeposited = surplus;
+      }
+    }
+
     var withdrawals = {};
     var remaining = netNeed > 0 ? netNeed : 0;
 
@@ -958,6 +975,7 @@ function simulateDrawdown(data, scenario, stressEvents) {
       anyRetired: anyRetired,
       secondHomeCost: secondHomeCost,
       rmdDetails: rmdDetails,
+      rmdSurplusDeposited: rmdSurplusDeposited,
     });
     prevGrowthOverrides = growthOverrides;
   }

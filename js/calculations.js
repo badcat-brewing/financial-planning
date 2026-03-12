@@ -39,6 +39,42 @@ var STANDARD_DEDUCTION_MFJ_BASE = 30000;
 var SS_TAX_THRESHOLD_LOW = 32000;
 var SS_TAX_THRESHOLD_HIGH = 44000;
 
+// Preset stress test scenarios — historical and custom
+var STRESS_SCENARIOS = {
+  '2008_crisis': {
+    label: '2008 Financial Crisis',
+    stockDrop: 0.55,
+    bondDrop: -0.05,
+    recoveryYears: 5,
+    recoveryGrowthRate: 0.15,
+    color: '#ef5350',
+  },
+  'covid_2020': {
+    label: 'COVID-19 Crash',
+    stockDrop: 0.34,
+    bondDrop: 0.0,
+    recoveryYears: 0.4,
+    recoveryGrowthRate: 0.40,
+    color: '#ffa726',
+  },
+  'dotcom_2000': {
+    label: 'Dot-Com Bust',
+    stockDrop: 0.49,
+    bondDrop: 0.05,
+    recoveryYears: 7,
+    recoveryGrowthRate: 0.10,
+    color: '#4fc3f7',
+  },
+  'custom': {
+    label: 'Custom',
+    stockDrop: 0.30,
+    bondDrop: 0.0,
+    recoveryYears: 3,
+    recoveryGrowthRate: null,
+    color: '#7c4dff',
+  },
+};
+
 /**
  * Calculate the taxable portion of Social Security benefits.
  * Uses the IRS provisional income formula (MFJ thresholds).
@@ -469,13 +505,75 @@ function isRmdAccount(type) {
 }
 
 /**
+ * Apply stress events to account balances for a given simulation year.
+ * Called inside simulateDrawdown's yearly loop after normal growth.
+ */
+function applyStressEvents(accountBalances, accounts, year, stressEvents, firstRetirementYear, scenario) {
+  if (!stressEvents || stressEvents.length === 0) return null;
+
+  var growthOverrides = null;
+
+  stressEvents.forEach(function(event) {
+    var stressYear = firstRetirementYear + event.yearOffset;
+    var se = event.scenario;
+
+    // Apply the drop in the stress year
+    if (year === stressYear) {
+      accounts.forEach(function(account) {
+        var assetClass = account.asset_class || ACCOUNT_TYPE_ASSET_CLASS[account.type];
+        if (assetClass === 'stock') {
+          accountBalances[account.name] *= (1 - se.stockDrop);
+        } else if (assetClass === 'bond') {
+          accountBalances[account.name] *= (1 - se.bondDrop);
+        }
+        // savings and checking: unaffected
+      });
+    }
+
+    // Sub-annual recovery: apply partial recovery in the same year as the drop
+    if (year === stressYear && se.recoveryYears < 1) {
+      var recoveryFraction = se.recoveryYears; // e.g. 0.4 for COVID
+      accounts.forEach(function(account) {
+        var assetClass = account.asset_class || ACCOUNT_TYPE_ASSET_CLASS[account.type];
+        if (assetClass === 'stock') {
+          var effectiveDrop = se.stockDrop * (1 - recoveryFraction);
+          var droppedBalance = accountBalances[account.name];
+          accountBalances[account.name] = droppedBalance * (1 - effectiveDrop) / (1 - se.stockDrop);
+        }
+      });
+      // No multi-year recovery needed
+      return;
+    }
+
+    // Multi-year recovery: override growth rates during recovery window
+    var recoveryEndYear = stressYear + Math.ceil(se.recoveryYears);
+    if (year > stressYear && year <= recoveryEndYear && se.recoveryYears >= 1) {
+      if (!growthOverrides) growthOverrides = {};
+      var recoveryRate = se.recoveryGrowthRate || (scenario.stock_growth * 2);
+      accounts.forEach(function(account) {
+        var assetClass = account.asset_class || ACCOUNT_TYPE_ASSET_CLASS[account.type];
+        if (assetClass === 'stock') {
+          // Use the higher rate if multiple recoveries overlap
+          var existing = growthOverrides[account.name];
+          if (!existing || recoveryRate > existing) {
+            growthOverrides[account.name] = recoveryRate;
+          }
+        }
+      });
+    }
+  });
+
+  return growthOverrides;
+}
+
+/**
  * Full drawdown simulation.
  * Simulates year-by-year spending from accounts in retirement.
  * Drawdown order: brokerage -> HSA (medical only) -> 401k/trad IRA -> Roth
  *
  * Returns { yearlyResults, sustainable, depletionYear, totalRemainingAtEnd }
  */
-function simulateDrawdown(data, scenario) {
+function simulateDrawdown(data, scenario, stressEvents) {
   var settings = data.settings;
   var people = data.household.people;
   var inflationRate = scenario.inflation;
@@ -501,6 +599,7 @@ function simulateDrawdown(data, scenario) {
   var yearlyResults = [];
   var sustainable = true;
   var depletionYear = null;
+  var prevGrowthOverrides = null;
 
   for (var year = CURRENT_YEAR; year <= endYear; year++) {
     // Determine if each person is retired
@@ -515,9 +614,21 @@ function simulateDrawdown(data, scenario) {
     if (year > CURRENT_YEAR) {
       data.accounts.forEach(function (account) {
         var balance = accountBalances[account.name];
-        var growthRate = getGrowthRate(account, scenario);
+        var growthRate = (prevGrowthOverrides && prevGrowthOverrides[account.name] != null)
+          ? prevGrowthOverrides[account.name]
+          : getGrowthRate(account, scenario);
         accountBalances[account.name] = balance * (1 + growthRate);
       });
+    }
+
+    // Apply stress events (drops and recovery growth overrides)
+    var growthOverrides = null;
+    if (stressEvents && stressEvents.length > 0) {
+      var firstRetirementYear = people.reduce(function(earliest, p) {
+        var ry = getRetirementYear(p, settings);
+        return ry < earliest ? ry : earliest;
+      }, Infinity);
+      growthOverrides = applyStressEvents(accountBalances, data.accounts, year, stressEvents, firstRetirementYear, scenario);
     }
 
     // Calculate income
@@ -766,6 +877,7 @@ function simulateDrawdown(data, scenario) {
       secondHomeCost: secondHomeCost,
       rmdDetails: rmdDetails,
     });
+    prevGrowthOverrides = growthOverrides;
   }
 
   var totalRemainingAtEnd = 0;
@@ -779,6 +891,29 @@ function simulateDrawdown(data, scenario) {
     depletionYear: depletionYear,
     totalRemainingAtEnd: totalRemainingAtEnd,
   };
+}
+
+/**
+ * Run baseline and stressed simulations side-by-side.
+ * Returns { baseline, stressed } each with { yearlyResults, sustainable, depletionYear, totalRemainingAtEnd }.
+ */
+function simulateWithStress(data, scenario, stressEvents, retirementOverrides) {
+  // Create a copy of data with overridden retirement ages
+  var settingsOverride = Object.assign({}, data.settings);
+  if (retirementOverrides) {
+    data.household.people.forEach(function(p) {
+      var key = 'retirement_age_' + p.name.toLowerCase();
+      if (retirementOverrides[p.name.toLowerCase()] !== undefined) {
+        settingsOverride[key] = retirementOverrides[p.name.toLowerCase()];
+      }
+    });
+  }
+  var dataCopy = Object.assign({}, data, { settings: settingsOverride });
+
+  var baseline = simulateDrawdown(dataCopy, scenario);
+  var stressed = simulateDrawdown(dataCopy, scenario, stressEvents);
+
+  return { baseline: baseline, stressed: stressed };
 }
 
 /**

@@ -40,13 +40,14 @@ var SS_TAX_THRESHOLD_LOW = 32000;
 var SS_TAX_THRESHOLD_HIGH = 44000;
 
 // Preset stress test scenarios — historical and custom
+// recoveryStrength: 0 = no elevated recovery (permanent hit), 100 = full V-shape catch-up
 var STRESS_SCENARIOS = {
   '2008_crisis': {
     label: '2008 Financial Crisis',
     stockDrop: 0.55,
     bondDrop: -0.05,
     recoveryYears: 5,
-    recoveryGrowthRate: 0.15,
+    recoveryStrength: 0,
     color: '#ef5350',
   },
   'covid_2020': {
@@ -54,7 +55,7 @@ var STRESS_SCENARIOS = {
     stockDrop: 0.34,
     bondDrop: 0.0,
     recoveryYears: 0.4,
-    recoveryGrowthRate: 0.40,
+    recoveryStrength: 0,
     color: '#ffa726',
   },
   'dotcom_2000': {
@@ -62,7 +63,7 @@ var STRESS_SCENARIOS = {
     stockDrop: 0.49,
     bondDrop: 0.05,
     recoveryYears: 7,
-    recoveryGrowthRate: 0.10,
+    recoveryStrength: 0,
     color: '#4fc3f7',
   },
   'custom': {
@@ -70,7 +71,7 @@ var STRESS_SCENARIOS = {
     stockDrop: 0.30,
     bondDrop: 0.0,
     recoveryYears: 3,
-    recoveryGrowthRate: null,
+    recoveryStrength: 0,
     color: '#7c4dff',
   },
 };
@@ -546,20 +547,28 @@ function applyStressEvents(accountBalances, accounts, year, stressEvents, firstR
     }
 
     // Multi-year recovery: override growth rates during recovery window
+    // recoveryStrength 0 = normal growth (permanent hit), 100 = full catch-up to baseline
     var recoveryEndYear = stressYear + Math.ceil(se.recoveryYears);
     if (year > stressYear && year <= recoveryEndYear && se.recoveryYears >= 1) {
-      if (!growthOverrides) growthOverrides = {};
-      var recoveryRate = se.recoveryGrowthRate || (scenario.stock_growth * 2);
-      accounts.forEach(function(account) {
-        var assetClass = account.asset_class || ACCOUNT_TYPE_ASSET_CLASS[account.type];
-        if (assetClass === 'stock') {
-          // Use the higher rate if multiple recoveries overlap
-          var existing = growthOverrides[account.name];
-          if (!existing || recoveryRate > existing) {
-            growthOverrides[account.name] = recoveryRate;
+      var strength = (se.recoveryStrength || 0) / 100;
+      if (strength > 0) {
+        if (!growthOverrides) growthOverrides = {};
+        var baseGrowth = scenario.stock_growth;
+        var N = Math.ceil(se.recoveryYears);
+        // Full catch-up rate: r = (1+g) * (1/(1-drop))^(1/N) - 1
+        var fullRecoveryRate = (1 + baseGrowth) * Math.pow(1 / (1 - se.stockDrop), 1 / N) - 1;
+        // Blend between baseline growth and full catch-up based on strength
+        var recoveryRate = baseGrowth + strength * (fullRecoveryRate - baseGrowth);
+        accounts.forEach(function(account) {
+          var assetClass = account.asset_class || ACCOUNT_TYPE_ASSET_CLASS[account.type];
+          if (assetClass === 'stock') {
+            var existing = growthOverrides[account.name];
+            if (!existing || recoveryRate > existing) {
+              growthOverrides[account.name] = recoveryRate;
+            }
           }
-        }
-      });
+        });
+      }
     }
   });
 

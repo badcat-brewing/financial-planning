@@ -139,8 +139,27 @@
         // Year offset slider
         html += '<div style="margin-top: 6px;">';
         html += '<div style="color: var(--text-muted); font-size: 11px;">Hits in year <span style="color: var(--accent-purple); font-weight: 700;">' + event.yearOffset + '</span> of retirement <span style="color: var(--text-muted);">(' + stressYear + ')</span></div>';
-        html += '<input type="range" class="stress-year-slider" data-idx="' + idx + '" min="1" max="30" value="' + event.yearOffset + '" style="width: 100%; margin-top: 4px; accent-color: var(--accent-purple);">';
+        html += '<div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">';
+        html += '<button class="slider-minus stress-year-minus" data-idx="' + idx + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">&minus;</button>';
+        html += '<input type="range" class="stress-year-slider" data-idx="' + idx + '" min="1" max="30" value="' + event.yearOffset + '" style="flex: 1; accent-color: var(--accent-purple);">';
+        html += '<button class="slider-plus stress-year-plus" data-idx="' + idx + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">+</button>';
         html += '</div>';
+        html += '</div>';
+
+        // Recovery strength slider (only for multi-year recoveries)
+        if (se.recoveryYears >= 1) {
+          var strength = se.recoveryStrength || 0;
+          var strengthLabel = strength === 0 ? 'None' : strength + '%';
+          html += '<div style="margin-top: 8px;">';
+          html += '<div style="color: var(--text-muted); font-size: 11px;">Recovery strength: <span style="color: var(--accent-purple); font-weight: 700;">' + strengthLabel + '</span></div>';
+          html += '<div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">';
+          html += '<button class="slider-minus recovery-strength-minus" data-idx="' + idx + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">&minus;</button>';
+          html += '<input type="range" class="recovery-strength-slider" data-idx="' + idx + '" min="0" max="100" step="10" value="' + strength + '" style="flex: 1; accent-color: var(--accent-purple);">';
+          html += '<button class="slider-plus recovery-strength-plus" data-idx="' + idx + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">+</button>';
+          html += '</div>';
+          html += '<div style="display: flex; justify-content: space-between; color: var(--text-muted); font-size: 9px; margin-top: 1px;"><span>Permanent hit</span><span>Full V-shape</span></div>';
+          html += '</div>';
+        }
 
         // Custom event editable fields
         if (event.isCustom) {
@@ -189,7 +208,11 @@
         html += '<span style="color: var(--text-secondary); font-size: 13px;">' + p.name + ' retires at</span>';
         html += '<span style="color: var(--text-primary); font-size: 18px; font-weight: 700;" id="retireAge_' + key + '">' + currentAge + '</span>';
         html += '</div>';
-        html += '<input type="range" class="retire-slider" data-person="' + key + '" min="' + minAge + '" max="' + maxAge + '" value="' + currentAge + '" style="width: 100%; margin-top: 6px; accent-color: var(--accent-purple);">';
+        html += '<div style="display: flex; align-items: center; gap: 6px; margin-top: 6px;">';
+        html += '<button class="slider-minus retire-minus" data-person="' + key + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">&minus;</button>';
+        html += '<input type="range" class="retire-slider" data-person="' + key + '" min="' + minAge + '" max="' + maxAge + '" value="' + currentAge + '" style="flex: 1; accent-color: var(--accent-purple);">';
+        html += '<button class="slider-plus retire-plus" data-person="' + key + '" style="background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0;">+</button>';
+        html += '</div>';
         html += '<div style="display: flex; justify-content: space-between; color: var(--text-muted); font-size: 10px; margin-top: 2px;"><span>' + minAge + '</span><span>' + maxAge + '</span></div>';
         html += '</div>';
       });
@@ -203,8 +226,8 @@
       var html = '';
 
       if (stressEvents.length === 0) {
-        html += '<div class="card" style="text-align: center; padding: 24px;">';
-        html += '<div style="color: var(--text-muted); font-size: 14px;">Add stress events above to see their impact on your portfolio.</div>';
+        html += '<div class="card" style="text-align: center; padding: 16px;">';
+        html += '<div style="color: var(--text-muted); font-size: 12px;">Add stress events to see impact metrics.</div>';
         html += '</div>';
         return html;
       }
@@ -254,34 +277,30 @@
         }
       }
 
-      html += '<div style="display: flex; gap: 12px; flex-wrap: wrap;">';
-
       // Card 1: Balance impact
-      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #ef5350; padding: 16px;">';
-      html += '<div style="color: #ef5350; font-size: 24px; font-weight: 700;">' + formatMoney(dd(balanceDelta, endYear)) + '</div>';
-      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Ending balance impact</div>';
+      html += '<div class="card" style="text-align: center; border-top: 3px solid #ef5350; padding: 12px;">';
+      html += '<div style="color: #ef5350; font-size: 18px; font-weight: 700;">' + formatMoney(dd(balanceDelta, endYear)) + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 11px; margin-top: 2px;">Ending balance impact</div>';
       html += '</div>';
 
       // Card 2: Depletion shift
-      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid ' + depletionColor + '; padding: 16px;">';
-      html += '<div style="color: ' + depletionColor + '; font-size: 24px; font-weight: 700;">' + depletionText + '</div>';
-      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Depletion shift</div>';
+      html += '<div class="card" style="text-align: center; border-top: 3px solid ' + depletionColor + '; padding: 12px;">';
+      html += '<div style="color: ' + depletionColor + '; font-size: 18px; font-weight: 700;">' + depletionText + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 11px; margin-top: 2px;">Depletion shift</div>';
       html += '</div>';
 
       // Card 3: Worst year
-      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #4fc3f7; padding: 16px;">';
-      html += '<div style="color: #4fc3f7; font-size: 24px; font-weight: 700;">' + formatMoney(dd(-worstLoss, worstYear)) + '</div>';
-      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Worst single-year loss (' + worstYear + ')</div>';
+      html += '<div class="card" style="text-align: center; border-top: 3px solid #4fc3f7; padding: 12px;">';
+      html += '<div style="color: #4fc3f7; font-size: 18px; font-weight: 700;">' + formatMoney(dd(-worstLoss, worstYear)) + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 11px; margin-top: 2px;">Worst year loss (' + worstYear + ')</div>';
       html += '</div>';
 
       // Card 4: Recovery
-      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #66bb6a; padding: 16px;">';
-      var recoveryText = recoveryYear ? String(recoveryYear) : 'Never fully recovers';
+      html += '<div class="card" style="text-align: center; border-top: 3px solid #66bb6a; padding: 12px;">';
+      var recoveryText = recoveryYear ? String(recoveryYear) : 'Never recovers';
       var recoveryColor = recoveryYear ? '#66bb6a' : '#ef5350';
-      html += '<div style="color: ' + recoveryColor + '; font-size: 24px; font-weight: 700;">' + recoveryText + '</div>';
-      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Full recovery year</div>';
-      html += '</div>';
-
+      html += '<div style="color: ' + recoveryColor + '; font-size: 18px; font-weight: 700;">' + recoveryText + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 11px; margin-top: 2px;">Full recovery year</div>';
       html += '</div>';
       return html;
     }
@@ -389,6 +408,57 @@
         });
       });
 
+      // Year offset +/- buttons
+      document.querySelectorAll('.stress-year-minus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          if (stressEvents[idx].yearOffset > 1) {
+            stressEvents[idx].yearOffset--;
+            render(data, scenario);
+          }
+        });
+      });
+      document.querySelectorAll('.stress-year-plus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          if (stressEvents[idx].yearOffset < 30) {
+            stressEvents[idx].yearOffset++;
+            render(data, scenario);
+          }
+        });
+      });
+
+      // Recovery strength sliders
+      document.querySelectorAll('.recovery-strength-slider').forEach(function(slider) {
+        slider.addEventListener('input', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          stressEvents[idx].scenario.recoveryStrength = parseInt(this.value);
+          debouncedRender(data, scenario);
+        });
+      });
+
+      // Recovery strength +/- buttons
+      document.querySelectorAll('.recovery-strength-minus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          var current = stressEvents[idx].scenario.recoveryStrength || 0;
+          if (current > 0) {
+            stressEvents[idx].scenario.recoveryStrength = Math.max(0, current - 10);
+            render(data, scenario);
+          }
+        });
+      });
+      document.querySelectorAll('.recovery-strength-plus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          var current = stressEvents[idx].scenario.recoveryStrength || 0;
+          if (current < 100) {
+            stressEvents[idx].scenario.recoveryStrength = Math.min(100, current + 10);
+            render(data, scenario);
+          }
+        });
+      });
+
       // Custom event inputs
       document.querySelectorAll('.custom-stock-drop').forEach(function(input) {
         input.addEventListener('change', function() {
@@ -427,7 +497,7 @@
             isCustom: isCustom,
           };
           if (isCustom) {
-            newEvent.scenario.recoveryGrowthRate = scenario.stock_growth * 2;
+            newEvent.scenario.recoveryStrength = 0;
           }
           stressEvents.push(newEvent);
           document.getElementById('addEventDropdown').classList.add('hidden');
@@ -444,6 +514,30 @@
           var label = document.getElementById('retireAge_' + person);
           if (label) label.textContent = age;
           debouncedRender(data, scenario);
+        });
+      });
+
+      // Retirement age +/- buttons
+      document.querySelectorAll('.retire-minus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var person = this.getAttribute('data-person');
+          var slider = document.querySelector('.retire-slider[data-person="' + person + '"]');
+          var min = parseInt(slider.min);
+          if (retirementOverrides[person] > min) {
+            retirementOverrides[person]--;
+            render(data, scenario);
+          }
+        });
+      });
+      document.querySelectorAll('.retire-plus').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var person = this.getAttribute('data-person');
+          var slider = document.querySelector('.retire-slider[data-person="' + person + '"]');
+          var max = parseInt(slider.max);
+          if (retirementOverrides[person] < max) {
+            retirementOverrides[person]++;
+            render(data, scenario);
+          }
         });
       });
     }
@@ -478,11 +572,15 @@
       // === SCENARIO BUILDER ===
       html += buildScenarioBuilder(data, scenario, people, settings);
 
-      // === CHART ===
+      // === CHART + IMPACT METRICS side by side ===
+      html += '<div style="display: flex; gap: 16px; align-items: start;">';
+      html += '<div style="flex: 1; min-width: 0;">';
       html += buildChart(baseline, stressed, data, scenario, people, settings, dd);
-
-      // === IMPACT METRICS ===
+      html += '</div>';
+      html += '<div style="width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px;">';
       html += buildImpactMetrics(baseline, stressed, dd, people, settings);
+      html += '</div>';
+      html += '</div>';
 
       container.innerHTML = html;
 

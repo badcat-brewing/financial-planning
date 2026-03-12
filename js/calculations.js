@@ -180,6 +180,40 @@ function isPersonRetired(person, settings, year) {
 }
 
 /**
+ * Get active stepdown salaries for a person in a given year.
+ * Returns an array of matching stepdown entries (may be empty).
+ */
+function getActiveStepdowns(person, data, year) {
+  if (!data.stepdown_salaries) return [];
+  var age = getPersonAge(person, year);
+  return data.stepdown_salaries.filter(function(sd) {
+    return sd.person === person.name && age >= sd.start_age && age <= sd.end_age;
+  });
+}
+
+/**
+ * Check if a person has health insurance from an active stepdown job.
+ */
+function hasStepdownInsurance(person, data, year) {
+  var active = getActiveStepdowns(person, data, year);
+  return active.some(function(sd) { return sd.has_health_insurance; });
+}
+
+/**
+ * Sum HSA and 401k contributions across all active stepdowns.
+ * Returns { hsa: number, k401: number }.
+ */
+function getStepdownContributions(stepdowns) {
+  var hsa = 0;
+  var k401 = 0;
+  stepdowns.forEach(function(sd) {
+    hsa += sd.hsa_contribution || 0;
+    k401 += sd.annual_401k_contribution || 0;
+  });
+  return { hsa: hsa, k401: k401 };
+}
+
+/**
  * Calculate annual contribution for an account in a given year,
  * including catch-up contributions where applicable.
  * Returns 0 if the owner is retired.
@@ -242,7 +276,7 @@ function projectAccount(account, scenario, people, settings, endYear, data) {
     if (account.type === 'hsa' && data && data.annual_expenses) {
       var inflationRate = scenario ? scenario.inflation || 0.03 : 0.03;
       var allRetired = people.every(function (p) { return isPersonRetired(p, settings, year); });
-      var expenses = getAnnualExpenses(data.annual_expenses, year, inflationRate, allRetired, people, settings);
+      var expenses = getAnnualExpenses(data.annual_expenses, year, inflationRate, allRetired, people, settings, data);
       var medicalDraw = Math.min(expenses.medical, balance);
       balance -= medicalDraw;
     }
@@ -396,7 +430,7 @@ function getRecurringExpenses(recurringExpenses, year, inflationRate, anyRetired
  *   Retired, pre-Medicare (<65): pre_medicare_medical per person
  *   65+ (Medicare): base medical × retirement factor per person
  */
-function getAnnualExpenses(annualExpenses, year, inflationRate, isRetired, people, settings) {
+function getAnnualExpenses(annualExpenses, year, inflationRate, isRetired, people, settings, data) {
   var yearsFromNow = year - CURRENT_YEAR;
   var inflationMultiplier = annualExpenses.inflation_adjusted
     ? Math.pow(1 + inflationRate, yearsFromNow)
@@ -423,7 +457,7 @@ function getAnnualExpenses(annualExpenses, year, inflationRate, isRetired, peopl
       var age = getPersonAge(person, year);
       var retired = isPersonRetired(person, settings, year);
 
-      if (retired && age < 65 && annualExpenses.pre_medicare_medical_monthly) {
+      if (retired && age < 65 && annualExpenses.pre_medicare_medical_monthly && !hasStepdownInsurance(person, data || {}, year)) {
         // Retired, pre-Medicare: full out-of-pocket per person
         var perPersonMonthly = annualExpenses.pre_medicare_medical_monthly / totalPeople;
         var cost = perPersonMonthly * 12 * inflationMultiplier;
@@ -676,7 +710,7 @@ function simulateDrawdown(data, scenario, stressEvents) {
     });
 
     // Calculate expenses
-    var expenses = getAnnualExpenses(data.annual_expenses, year, inflationRate, allRetired, people, settings);
+    var expenses = getAnnualExpenses(data.annual_expenses, year, inflationRate, allRetired, people, settings, data);
     var recurring = getRecurringExpenses(data.recurring_expenses, year, inflationRate, anyRetired);
 
     // HSA pays annual medical expenses first
@@ -746,6 +780,17 @@ function simulateDrawdown(data, scenario, stressEvents) {
       }
     });
 
+    // Stepdown salary income — retired people with active stepdown jobs
+    people.forEach(function(person) {
+      if (!isPersonRetired(person, settings, year)) return;
+      var stepdowns = getActiveStepdowns(person, data, year);
+      stepdowns.forEach(function(sd) {
+        var stepdownStartYear = person.birth_year + sd.start_age;
+        var yearsInStepdown = year - stepdownStartYear;
+        salaryIncome += sd.take_home_income * Math.pow(1 + raiseRate, yearsInStepdown);
+      });
+    });
+
     // Lump sum income
     var lumpSumIncome = 0;
     lumpSumEvents.forEach(function (event) {
@@ -788,6 +833,34 @@ function simulateDrawdown(data, scenario, stressEvents) {
           }
         });
       }
+
+      // Pass 3: Stepdown contributions — retired people with active stepdowns
+      people.forEach(function(person) {
+        if (!isPersonRetired(person, settings, year)) return;
+        var stepdowns = getActiveStepdowns(person, data, year);
+        if (stepdowns.length === 0) return;
+        var contrib = getStepdownContributions(stepdowns);
+
+        if (contrib.hsa > 0) {
+          var hsaAcct = data.accounts.find(function(a) {
+            return a.type === 'hsa' && a.owner === person.name;
+          });
+          if (hsaAcct) {
+            accountBalances[hsaAcct.name] += contrib.hsa;
+            totalContributions += contrib.hsa;
+          }
+        }
+
+        if (contrib.k401 > 0) {
+          var k401Acct = data.accounts.find(function(a) {
+            return a.type === '401k' && a.owner === person.name;
+          });
+          if (k401Acct) {
+            accountBalances[k401Acct.name] += contrib.k401;
+            totalContributions += contrib.k401;
+          }
+        }
+      });
     }
 
     // Net need after all income and contributions

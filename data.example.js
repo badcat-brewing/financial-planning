@@ -201,6 +201,23 @@ second_home:
   annual_appreciation: 0.03
 
 # ──────────────────────────────────────────────
+# STEPDOWN SALARIES [OPTIONAL]
+# ──────────────────────────────────────────────
+# Semi-retirement jobs taken after leaving primary career.
+# Each entry describes a separate job with its own start/end age, income,
+# health insurance coverage, and optional retirement account contributions.
+# Multiple entries per person are allowed (sequential or overlapping gigs).
+# Omit this section entirely if not applicable.
+stepdown_salaries:
+  - person: Alex
+    start_age: 62                           # When this job begins
+    end_age: 65                             # Last year of this job (inclusive)
+    take_home_income: 50000                 # Annual after-tax income
+    has_health_insurance: true              # Employer provides health insurance?
+    hsa_contribution: 2000                  # Optional — annual HSA contribution (default 0)
+    annual_401k_contribution: 5000          # Optional — annual 401k contribution (default 0)
+
+# ──────────────────────────────────────────────
 # SCENARIOS [REQUIRED]
 # ──────────────────────────────────────────────
 # Define multiple scenarios with different growth/inflation assumptions.

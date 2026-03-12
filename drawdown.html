@@ -111,6 +111,30 @@
         }
       });
 
+      // Stepdown salary rows
+      if (data.stepdown_salaries) {
+        data.stepdown_salaries.forEach(function(sd) {
+          var person = people.find(function(p) { return p.name === sd.person; });
+          if (!person) return;
+          var startYear = person.birth_year + sd.start_age;
+          var endYear = person.birth_year + sd.end_age;
+          html += '<tr>';
+          html += '<td>Stepdown Salary</td>';
+          html += '<td>' + sd.person + '</td>';
+          html += '<td>' + startYear + '\u2013' + endYear + ' (age ' + sd.start_age + '\u2013' + sd.end_age + ')</td>';
+          html += '<td class="money" style="text-align:right;">' + formatMoney(sd.take_home_income) + '</td>';
+          html += '</tr>';
+          if (sd.has_health_insurance) {
+            html += '<tr>';
+            html += '<td style="padding-left: 20px; color: var(--text-muted); font-size: 0.85rem;">\u21B3 Employer Insurance</td>';
+            html += '<td>' + sd.person + '</td>';
+            html += '<td>' + startYear + '\u2013' + endYear + '</td>';
+            html += '<td class="text-muted" style="text-align:right; font-size: 0.85rem;">Included</td>';
+            html += '</tr>';
+          }
+        });
+      }
+
       html += '</tbody></table>';
       html += '</div>';
 

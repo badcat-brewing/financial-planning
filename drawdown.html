@@ -127,6 +127,10 @@
       var result = simulateDrawdown(data, scenario);
       var yearlyResults = result.yearlyResults;
 
+      var oldestPerson = people.reduce(function(oldest, p) {
+        return p.birth_year < oldest.birth_year ? p : oldest;
+      }, people[0]);
+
       // Sustainability indicator
       html += '<div class="card" style="text-align: center;">';
       var simEndYear = oldestPerson.birth_year + settings.projection_end_age;
@@ -138,10 +142,6 @@
         html += '<div class="indicator negative">Accounts may deplete by age ' + depletionAge + ' (' + result.depletionYear + ')</div>';
       }
       html += '</div>';
-
-      var oldestPerson = people.reduce(function(oldest, p) {
-        return p.birth_year < oldest.birth_year ? p : oldest;
-      }, people[0]);
 
       // Find first retirement year for chart filtering
       var firstRetireYear = Infinity;

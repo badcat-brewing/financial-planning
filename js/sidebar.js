@@ -7,6 +7,7 @@ var PAGES = [
   { href: 'index.html', label: 'Dashboard' },
   { href: 'contributions.html', label: 'Contributions' },
   { href: 'projections.html', label: 'Projections' },
+  { href: 'stress-test.html', label: 'Stress Test' },
   { href: 'milestones.html', label: 'Milestones' },
   { href: 'social-security.html', label: 'Social Security' },
   { href: 'rmds.html', label: 'RMDs' },

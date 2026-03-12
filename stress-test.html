@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Stress Test</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    // Page-local state
+    var stressChart = null;
+    var stressEvents = [];
+    var retirementOverrides = {};
+    var eventColors = ['#ef5350', '#ffa726', '#4fc3f7', '#7c4dff', '#66bb6a', '#ec407a'];
+
+    // Custom plugin for vertical stress event annotations
+    var stressAnnotationPlugin = {
+      id: 'stressAnnotations',
+      afterDraw: function(chart) {
+        if (!chart.stressAnnotations) return;
+        var ctx = chart.ctx;
+        var xAxis = chart.scales.x;
+        var yAxis = chart.scales.y;
+
+        chart.stressAnnotations.forEach(function(ann) {
+          var xPos = xAxis.getPixelForValue(ann.index);
+          if (xPos < xAxis.left || xPos > xAxis.right) return;
+
+          ctx.save();
+          ctx.setLineDash([5, 4]);
+          ctx.strokeStyle = ann.color;
+          ctx.lineWidth = 1.5;
+          ctx.globalAlpha = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(xPos, yAxis.top);
+          ctx.lineTo(xPos, yAxis.bottom);
+          ctx.stroke();
+
+          // Label
+          ctx.globalAlpha = 0.8;
+          ctx.fillStyle = ann.color;
+          ctx.font = '10px -apple-system, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(ann.label, xPos + 4, yAxis.top + 12);
+          ctx.restore();
+        });
+      }
+    };
+
+    function buildChart(baseline, stressed, data, scenario, people, settings, dd) {
+      var html = '';
+      html += '<div class="card">';
+      html += '<h2>Portfolio Balance Over Time</h2>';
+      html += '<p style="color: var(--text-muted); margin-top: -8px;">Baseline vs. stressed projection</p>';
+      html += '<div class="chart-container" style="max-height: 500px;">';
+      html += '<canvas id="stressChart"></canvas>';
+      html += '</div>';
+
+      // Age timeline
+      var yearlyResults = baseline.yearlyResults;
+      html += '<div style="overflow-x: auto; margin-top: 16px;">';
+      html += '<table class="data-table" style="font-size: 0.8rem;">';
+      html += '<thead><tr><th style="width: 80px;"></th>';
+      yearlyResults.forEach(function(r) {
+        if (r.year % 5 === 0) {
+          html += '<th style="text-align: center; padding: 4px 6px;">' + r.year + '</th>';
+        }
+      });
+      html += '</tr></thead><tbody>';
+      people.forEach(function(person) {
+        var key = person.name.toLowerCase();
+        var retireAge = retirementOverrides[key] || getRetirementAge(person, settings);
+        html += '<tr><td style="font-weight: 600; color: var(--text-primary);">' + person.name + '</td>';
+        yearlyResults.forEach(function(r) {
+          if (r.year % 5 === 0) {
+            var age = r.year - person.birth_year;
+            var isRetired = age >= retireAge;
+            var color = isRetired ? 'var(--accent-purple)' : 'var(--text-secondary)';
+            html += '<td style="text-align: center; padding: 4px 6px; color: ' + color + ';">' + age + '</td>';
+          }
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function buildScenarioBuilder(data, scenario, people, settings) {
+      var html = '';
+
+      // Stress event cards
+      html += '<div class="card">';
+      html += '<h2>Scenario Builder</h2>';
+      html += '<div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;">';
+
+      stressEvents.forEach(function(event, idx) {
+        var se = event.scenario;
+        var color = eventColors[idx % eventColors.length];
+        var firstRetirementYear = people.reduce(function(earliest, p) {
+          var key = 'retirement_age_' + p.name.toLowerCase();
+          var age = retirementOverrides[p.name.toLowerCase()] || settings[key] || 65;
+          return Math.min(earliest, p.birth_year + age);
+        }, Infinity);
+        var stressYear = firstRetirementYear + event.yearOffset;
+
+        html += '<div style="flex: 1; min-width: 200px; max-width: 320px; background: var(--card-bg); border-radius: 8px; padding: 14px; border-left: 3px solid ' + color + '; position: relative;">';
+
+        // Remove button
+        html += '<button class="stress-remove-btn" data-idx="' + idx + '" style="position: absolute; top: 6px; right: 10px; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px;">&times;</button>';
+
+        // Event name
+        html += '<div style="color: ' + color + '; font-weight: 600; font-size: 14px; margin-bottom: 8px;">' + se.label + '</div>';
+
+        // Stats row
+        html += '<div style="display: flex; gap: 14px; margin-bottom: 10px;">';
+        html += '<div><div style="color: var(--text-muted); font-size: 10px; text-transform: uppercase;">Stocks</div>';
+        html += '<div style="color: #ef5350; font-size: 15px; font-weight: 700;">-' + Math.round(se.stockDrop * 100) + '%</div></div>';
+        var bondColor = se.bondDrop < 0 ? '#66bb6a' : (se.bondDrop > 0 ? '#ef5350' : 'var(--text-secondary)');
+        var bondSign = se.bondDrop < 0 ? '+' : (se.bondDrop > 0 ? '-' : '');
+        html += '<div><div style="color: var(--text-muted); font-size: 10px; text-transform: uppercase;">Bonds</div>';
+        html += '<div style="color: ' + bondColor + '; font-size: 15px; font-weight: 700;">' + bondSign + Math.abs(Math.round(se.bondDrop * 100)) + '%</div></div>';
+        html += '<div><div style="color: var(--text-muted); font-size: 10px; text-transform: uppercase;">Recovery</div>';
+        var recoveryLabel = se.recoveryYears < 1 ? Math.round(se.recoveryYears * 12) + ' mo' : se.recoveryYears + ' yrs';
+        html += '<div style="color: var(--text-primary); font-size: 15px; font-weight: 700;">' + recoveryLabel + '</div></div>';
+        html += '</div>';
+
+        // Year offset slider
+        html += '<div style="margin-top: 6px;">';
+        html += '<div style="color: var(--text-muted); font-size: 11px;">Hits in year <span style="color: var(--accent-purple); font-weight: 700;">' + event.yearOffset + '</span> of retirement <span style="color: var(--text-muted);">(' + stressYear + ')</span></div>';
+        html += '<input type="range" class="stress-year-slider" data-idx="' + idx + '" min="1" max="30" value="' + event.yearOffset + '" style="width: 100%; margin-top: 4px; accent-color: var(--accent-purple);">';
+        html += '</div>';
+
+        // Custom event editable fields
+        if (event.isCustom) {
+          html += '<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">';
+          html += '<div style="display: flex; gap: 8px;">';
+          html += '<div style="flex: 1;"><label style="color: var(--text-muted); font-size: 10px;">Stock Drop %</label>';
+          html += '<input type="number" class="custom-stock-drop" data-idx="' + idx + '" value="' + Math.round(se.stockDrop * 100) + '" min="1" max="90" style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 6px; font-size: 13px;"></div>';
+          html += '<div style="flex: 1;"><label style="color: var(--text-muted); font-size: 10px;">Recovery Yrs</label>';
+          html += '<input type="number" class="custom-recovery" data-idx="' + idx + '" value="' + se.recoveryYears + '" min="0.5" max="15" step="0.5" style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 6px; font-size: 13px;"></div>';
+          html += '</div></div>';
+        }
+
+        html += '</div>';
+      });
+
+      // Add Event button
+      html += '<div style="min-width: 140px; max-width: 200px; border: 2px dashed var(--border-color); border-radius: 8px; padding: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer;" id="addEventBtn">';
+      html += '<div style="text-align: center;">';
+      html += '<div style="color: var(--text-muted); font-size: 22px;">+</div>';
+      html += '<div style="color: var(--text-muted); font-size: 12px;">Add Event</div>';
+      html += '</div>';
+      html += '</div>';
+
+      html += '</div>'; // close flex row
+
+      // Add event dropdown (hidden by default)
+      html += '<div id="addEventDropdown" class="hidden" style="margin-bottom: 16px; padding: 12px; background: var(--bg-primary); border-radius: 6px; border: 1px solid var(--border-color);">';
+      html += '<div style="color: var(--text-secondary); font-size: 12px; margin-bottom: 8px;">Choose a scenario:</div>';
+      html += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
+      Object.keys(STRESS_SCENARIOS).forEach(function(key) {
+        var s = STRESS_SCENARIOS[key];
+        html += '<button class="toggle-btn add-scenario-btn" data-key="' + key + '" style="padding: 6px 14px; font-size: 12px;">' + s.label + '</button>';
+      });
+      html += '</div>';
+      html += '</div>';
+
+      // Retirement age sliders
+      html += '<div style="display: flex; gap: 12px; margin-top: 4px;">';
+      people.forEach(function(p) {
+        var key = p.name.toLowerCase();
+        var currentAge = retirementOverrides[key] || getRetirementAge(p, settings);
+        var minAge = Math.max(getPersonAge(p, CURRENT_YEAR), 45);
+        var maxAge = 75;
+        html += '<div style="flex: 1; background: var(--card-bg); border-radius: 8px; padding: 12px 16px;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+        html += '<span style="color: var(--text-secondary); font-size: 13px;">' + p.name + ' retires at</span>';
+        html += '<span style="color: var(--text-primary); font-size: 18px; font-weight: 700;" id="retireAge_' + key + '">' + currentAge + '</span>';
+        html += '</div>';
+        html += '<input type="range" class="retire-slider" data-person="' + key + '" min="' + minAge + '" max="' + maxAge + '" value="' + currentAge + '" style="width: 100%; margin-top: 6px; accent-color: var(--accent-purple);">';
+        html += '<div style="display: flex; justify-content: space-between; color: var(--text-muted); font-size: 10px; margin-top: 2px;"><span>' + minAge + '</span><span>' + maxAge + '</span></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      html += '</div>'; // close card
+      return html;
+    }
+
+    function buildImpactMetrics(baseline, stressed, dd, people, settings) {
+      var html = '';
+
+      if (stressEvents.length === 0) {
+        html += '<div class="card" style="text-align: center; padding: 24px;">';
+        html += '<div style="color: var(--text-muted); font-size: 14px;">Add stress events above to see their impact on your portfolio.</div>';
+        html += '</div>';
+        return html;
+      }
+
+      var baselineEnd = baseline.yearlyResults[baseline.yearlyResults.length - 1];
+      var stressedEnd = stressed.yearlyResults[stressed.yearlyResults.length - 1];
+      var endYear = baselineEnd.year;
+
+      // 1. Ending balance impact
+      var balanceDelta = stressedEnd.totalRemaining - baselineEnd.totalRemaining;
+
+      // 2. Depletion shift
+      var depletionText = '';
+      var depletionColor = '#ffa726';
+      if (!baseline.sustainable && !stressed.sustainable) {
+        var shift = baseline.depletionYear - stressed.depletionYear;
+        depletionText = shift > 0 ? shift + ' yrs earlier' : 'Same year';
+      } else if (baseline.sustainable && !stressed.sustainable) {
+        var depletionAge = stressed.depletionYear - people[0].birth_year;
+        depletionText = 'Depletes at ' + depletionAge;
+        depletionColor = '#ef5350';
+      } else {
+        depletionText = 'Still sustains';
+        depletionColor = '#66bb6a';
+      }
+
+      // 3. Worst single-year loss
+      var worstLoss = 0;
+      var worstYear = 0;
+      for (var i = 1; i < stressed.yearlyResults.length; i++) {
+        var drop = stressed.yearlyResults[i - 1].totalRemaining - stressed.yearlyResults[i].totalRemaining;
+        if (drop > worstLoss) {
+          worstLoss = drop;
+          worstYear = stressed.yearlyResults[i].year;
+        }
+      }
+
+      // 4. Recovery year — when stressed catches back up to baseline
+      var recoveryYear = null;
+      var wasBelow = false;
+      for (var i = 0; i < stressed.yearlyResults.length; i++) {
+        if (stressed.yearlyResults[i].totalRemaining < baseline.yearlyResults[i].totalRemaining * 0.99) {
+          wasBelow = true;
+        } else if (wasBelow) {
+          recoveryYear = stressed.yearlyResults[i].year;
+          break;
+        }
+      }
+
+      html += '<div style="display: flex; gap: 12px; flex-wrap: wrap;">';
+
+      // Card 1: Balance impact
+      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #ef5350; padding: 16px;">';
+      html += '<div style="color: #ef5350; font-size: 24px; font-weight: 700;">' + formatMoney(dd(balanceDelta, endYear)) + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Ending balance impact</div>';
+      html += '</div>';
+
+      // Card 2: Depletion shift
+      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid ' + depletionColor + '; padding: 16px;">';
+      html += '<div style="color: ' + depletionColor + '; font-size: 24px; font-weight: 700;">' + depletionText + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Depletion shift</div>';
+      html += '</div>';
+
+      // Card 3: Worst year
+      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #4fc3f7; padding: 16px;">';
+      html += '<div style="color: #4fc3f7; font-size: 24px; font-weight: 700;">' + formatMoney(dd(-worstLoss, worstYear)) + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Worst single-year loss (' + worstYear + ')</div>';
+      html += '</div>';
+
+      // Card 4: Recovery
+      html += '<div class="card" style="flex: 1; min-width: 160px; text-align: center; border-top: 3px solid #66bb6a; padding: 16px;">';
+      var recoveryText = recoveryYear ? String(recoveryYear) : 'Never fully recovers';
+      var recoveryColor = recoveryYear ? '#66bb6a' : '#ef5350';
+      html += '<div style="color: ' + recoveryColor + '; font-size: 24px; font-weight: 700;">' + recoveryText + '</div>';
+      html += '<div style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">Full recovery year</div>';
+      html += '</div>';
+
+      html += '</div>';
+      return html;
+    }
+
+    function renderChart(baseline, stressed, data, scenario, people, settings, dd) {
+      if (stressChart) { stressChart.destroy(); stressChart = null; }
+
+      var canvas = document.getElementById('stressChart');
+      if (!canvas) return;
+
+      var labels = baseline.yearlyResults.map(function(r) {
+        return r.year % 5 === 0 ? String(r.year) : '';
+      });
+
+      var baselineData = baseline.yearlyResults.map(function(r) {
+        return dd(r.totalRemaining, r.year);
+      });
+      var stressedData = stressed.yearlyResults.map(function(r) {
+        return dd(r.totalRemaining, r.year);
+      });
+
+      var datasets = [
+        {
+          label: 'Baseline',
+          data: baselineData,
+          borderColor: CHART_COLORS.green,
+          borderWidth: 2.5,
+          borderDash: [6, 4],
+          pointRadius: 0,
+          tension: 0.3,
+          fill: false,
+        },
+        {
+          label: 'Stressed',
+          data: stressedData,
+          borderColor: CHART_COLORS.red,
+          borderWidth: 2.5,
+          pointRadius: 0,
+          tension: 0.3,
+          fill: '-1',
+          backgroundColor: 'rgba(239, 83, 80, 0.08)',
+        },
+      ];
+
+      // Build annotation data for vertical lines
+      var annotations = [];
+      if (stressEvents.length > 0) {
+        var firstRetirementYear = people.reduce(function(earliest, p) {
+          var key = p.name.toLowerCase();
+          var age = retirementOverrides[key] || getRetirementAge(p, settings);
+          return Math.min(earliest, p.birth_year + age);
+        }, Infinity);
+
+        stressEvents.forEach(function(event, idx) {
+          var stressYear = firstRetirementYear + event.yearOffset;
+          var yearIndex = baseline.yearlyResults.findIndex(function(r) { return r.year === stressYear; });
+          if (yearIndex >= 0) {
+            annotations.push({
+              index: yearIndex,
+              label: event.scenario.label + ' @ Yr ' + event.yearOffset,
+              color: eventColors[idx % eventColors.length],
+            });
+          }
+        });
+      }
+
+      var opts = getDefaultOptions();
+      opts.plugins.legend.position = 'top';
+
+      stressChart = new Chart(canvas, {
+        type: 'line',
+        data: { labels: labels, datasets: datasets },
+        options: opts,
+        plugins: [stressAnnotationPlugin],
+      });
+
+      // Attach annotation data to chart instance for the plugin
+      stressChart.stressAnnotations = annotations;
+      stressChart.update();
+    }
+
+    // Debounce helper for slider inputs
+    var debounceTimer = null;
+    function debouncedRender(data, scenario) {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function() { render(data, scenario); }, 80);
+    }
+
+    function attachEventListeners(data, scenario, people, settings) {
+      // Remove event buttons
+      document.querySelectorAll('.stress-remove-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          stressEvents.splice(idx, 1);
+          render(data, scenario);
+        });
+      });
+
+      // Year offset sliders
+      document.querySelectorAll('.stress-year-slider').forEach(function(slider) {
+        slider.addEventListener('input', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          stressEvents[idx].yearOffset = parseInt(this.value);
+          debouncedRender(data, scenario);
+        });
+      });
+
+      // Custom event inputs
+      document.querySelectorAll('.custom-stock-drop').forEach(function(input) {
+        input.addEventListener('change', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          stressEvents[idx].scenario.stockDrop = parseInt(this.value) / 100;
+          render(data, scenario);
+        });
+      });
+
+      document.querySelectorAll('.custom-recovery').forEach(function(input) {
+        input.addEventListener('change', function() {
+          var idx = parseInt(this.getAttribute('data-idx'));
+          stressEvents[idx].scenario.recoveryYears = parseFloat(this.value);
+          render(data, scenario);
+        });
+      });
+
+      // Add event button
+      var addBtn = document.getElementById('addEventBtn');
+      if (addBtn) {
+        addBtn.addEventListener('click', function() {
+          var dropdown = document.getElementById('addEventDropdown');
+          dropdown.classList.toggle('hidden');
+        });
+      }
+
+      // Add scenario buttons
+      document.querySelectorAll('.add-scenario-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var key = this.getAttribute('data-key');
+          var template = STRESS_SCENARIOS[key];
+          var isCustom = key === 'custom';
+          var newEvent = {
+            scenario: Object.assign({}, template),
+            yearOffset: 5,
+            isCustom: isCustom,
+          };
+          if (isCustom) {
+            newEvent.scenario.recoveryGrowthRate = scenario.stock_growth * 2;
+          }
+          stressEvents.push(newEvent);
+          document.getElementById('addEventDropdown').classList.add('hidden');
+          render(data, scenario);
+        });
+      });
+
+      // Retirement age sliders
+      document.querySelectorAll('.retire-slider').forEach(function(slider) {
+        slider.addEventListener('input', function() {
+          var person = this.getAttribute('data-person');
+          var age = parseInt(this.value);
+          retirementOverrides[person] = age;
+          var label = document.getElementById('retireAge_' + person);
+          if (label) label.textContent = age;
+          debouncedRender(data, scenario);
+        });
+      });
+    }
+
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var people = data.household.people;
+      var settings = data.settings;
+      var inflationRate = scenario.inflation;
+      function dd(amount, year) { return toDisplayDollars(amount, year, inflationRate); }
+
+      // Initialize retirement overrides from settings on first render
+      if (Object.keys(retirementOverrides).length === 0) {
+        people.forEach(function(p) {
+          retirementOverrides[p.name.toLowerCase()] = getRetirementAge(p, settings);
+        });
+      }
+
+      // Run simulations
+      var simResult = simulateWithStress(data, scenario, stressEvents, retirementOverrides);
+      var baseline = simResult.baseline;
+      var stressed = simResult.stressed;
+
+      var html = '';
+
+      // Page header
+      html += '<div class="page-header">';
+      html += '<h1>Stress Test</h1>';
+      html += '<p>Model market crashes and recovery scenarios against your retirement plan (' + scenario.label + ' scenario)' + getDollarModeLabel() + '</p>';
+      html += '</div>';
+
+      // === SCENARIO BUILDER ===
+      html += buildScenarioBuilder(data, scenario, people, settings);
+
+      // === CHART ===
+      html += buildChart(baseline, stressed, data, scenario, people, settings, dd);
+
+      // === IMPACT METRICS ===
+      html += buildImpactMetrics(baseline, stressed, dd, people, settings);
+
+      container.innerHTML = html;
+
+      // Attach event listeners after DOM is built
+      attachEventListeners(data, scenario, people, settings);
+
+      // Render the chart
+      renderChart(baseline, stressed, data, scenario, people, settings, dd);
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

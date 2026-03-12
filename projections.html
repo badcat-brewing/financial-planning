@@ -379,66 +379,60 @@
       if (balanceChart) { balanceChart.destroy(); balanceChart = null; }
       var h2 = document.querySelector('#content .card h2');
       if (h2) h2.textContent = "Tim's Retirement Projection";
-      var n = 46;
-      var center = 2000000;
-      var top = [], bot = [];
-      var hw = [
-        0, 0,
-        200, 600, 900, 1100, 1100, 900, 600,
-        200,
-        600, 900, 1100, 1100, 900, 600,
-        350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350, 350,
-        450, 650, 950, 1200, 1350, 1350, 1200, 950, 650, 450,
-        200, 0, 0, 0
-      ];
-      for (var i = 0; i < n; i++) {
-        var w = (hw[i] || 0) * 1000;
-        top.push(center + w);
-        bot.push(center - w);
-      }
-      var labels = [];
-      for (var i = 0; i < n; i++) labels.push('');
+
       var canvas = document.getElementById('balanceChart');
       if (!canvas) return;
-      balanceChart = new Chart(canvas, {
-        type: 'line',
-        data: {
-          labels: labels,
-          datasets: [
-            {
-              label: 'Growth Potential',
-              data: top,
-              borderColor: '#ec407a',
-              borderWidth: 2,
-              pointRadius: 0,
-              tension: 0.4,
-              fill: false,
-            },
-            {
-              label: 'Thrust Capacity',
-              data: bot,
-              borderColor: '#ec407a',
-              borderWidth: 2,
-              pointRadius: 0,
-              tension: 0.4,
-              fill: '-1',
-              backgroundColor: 'rgba(236, 64, 122, 0.25)',
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: { enabled: false },
-          },
-          scales: {
-            x: { display: false },
-            y: { display: false },
-          },
-        },
-      });
+      var ctx = canvas.getContext('2d');
+      var W = canvas.width;
+      var H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      var stroke = '#ec407a';
+      var fillA = 'rgba(236, 64, 122, 0.35)';
+
+      function drawEllipse(cx, cy, rx, ry) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      function drawRoundRect(x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.arcTo(x + w, y, x + w, y + r, r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+        ctx.lineTo(x + r, y + h);
+        ctx.arcTo(x, y + h, x, y + h - r, r);
+        ctx.lineTo(x, y + r);
+        ctx.arcTo(x, y, x + r, y, r);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2.5;
+      ctx.fillStyle = fillA;
+
+      // Scale to canvas. Layout: total logical width ~18, height ~10
+      var sx = W / 18;
+      var sy = H / 10;
+      var cy = H / 2;
+
+      // Shaft: horizontal from x=4 to x=14.5
+      var shaftH = 2.4 * sy;
+      drawRoundRect(4 * sx, cy - shaftH / 2, 10.5 * sx, shaftH, 8);
+
+      // Top ball
+      drawEllipse(3.8 * sx, cy - 1.7 * sy, 2.0 * sx, 1.9 * sy);
+      // Bottom ball
+      drawEllipse(3.8 * sx, cy + 1.7 * sy, 2.0 * sx, 1.9 * sy);
+
+      // Head
+      drawEllipse(14.5 * sx, cy, 2.2 * sx, 2.7 * sy);
     }
 
     function init() {

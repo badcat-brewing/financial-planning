@@ -47,6 +47,9 @@
         retirementYears.push({ name: p.name, year: getRetirementYear(p, settings) });
       });
 
+      var inflationRate = scenario.inflation;
+      function dd(amount, year) { return toDisplayDollars(amount, year, inflationRate); }
+
       // Group accounts by type
       var typeOrder = ['brokerage', 'hsa', '401k', 'traditional_ira', 'roth_ira', 'savings', 'checking'];
       var typeColors = {
@@ -132,10 +135,6 @@
 
       // --- HTML ---
       var html = '';
-
-      var inflationRate = scenario.inflation;
-      // Helper: deflate to display dollars
-      function dd(amount, year) { return toDisplayDollars(amount, year, inflationRate); }
 
       html += '<div class="page-header">';
       html += '<h1><span id="eggP" style="cursor:inherit;user-select:text;">P</span>ortfolio Projections</h1>';

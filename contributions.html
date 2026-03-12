@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Contributions & Cash Flow</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    var cashFlowChart = null;
+
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var people = data.household.people;
+      var settings = data.settings;
+      var year = CURRENT_YEAR;
+
+      var html = '';
+
+      // Page header
+      html += '<div class="page-header">';
+      html += '<h1>Contributions & Cash Flow</h1>';
+      html += '<p>Annual inflows and outflows for ' + year + '</p>';
+      html += '</div>';
+
+      // --- Contributions table ---
+      html += '<div class="card" style="border-left-color: var(--accent-green);">';
+      html += '<h2 class="text-green">Annual Contributions</h2>';
+      html += '<table class="data-table">';
+      html += '<thead><tr>';
+      html += '<th>Account</th><th>Owner</th><th>Annual Contribution</th><th>Employer Match</th><th style="text-align:right;">Total</th>';
+      html += '</tr></thead><tbody>';
+
+      var totalContributions = 0;
+
+      data.accounts.forEach(function(account) {
+        if (account.type === 'checking') return;
+        var base = account.annual_contribution || 0;
+        var match = account.employer_match || 0;
+
+        // Add catch-up if eligible
+        var catchup = CATCHUP_LIMITS[account.type];
+        var owner = null;
+        if (account.owner) {
+          owner = people.find(function(p) { return p.name === account.owner; });
+        }
+        if (catchup && owner) {
+          var age = getPersonAge(owner, year);
+          if (age >= catchup.age) {
+            base += catchup.amount;
+          }
+        }
+
+        // Skip accounts with no contributions
+        if (base === 0 && match === 0) return;
+
+        var total = base + match;
+        totalContributions += total;
+
+        html += '<tr>';
+        html += '<td>' + account.name + '</td>';
+        html += '<td>' + (account.owner || '—') + '</td>';
+        html += '<td class="money">' + formatMoney(base) + '</td>';
+        html += '<td class="money">' + (match > 0 ? formatMoney(match) : '—') + '</td>';
+        html += '<td class="money text-green">' + formatMoney(total) + '</td>';
+        html += '</tr>';
+      });
+
+      html += '<tr class="total-row">';
+      html += '<td colspan="4">Total Annual Contributions</td>';
+      html += '<td class="money text-green">' + formatMoney(totalContributions) + '</td>';
+      html += '</tr>';
+      html += '</tbody></table>';
+      html += '</div>';
+
+      // --- Annual Expenses ---
+      var expenses = getAnnualExpenses(data.annual_expenses, year, scenario.inflation, false, people, settings);
+      var mortgageAnnual = 0;
+      if (data.liabilities && data.liabilities.length > 0) {
+        mortgageAnnual = data.liabilities[0].monthly_payment * 12;
+      }
+      var totalExpenses = expenses.total + mortgageAnnual;
+
+      html += '<div class="card" style="border-left-color: var(--accent-red);">';
+      html += '<h2 class="text-red">Annual Expenses</h2>';
+      html += '<table class="data-table">';
+      html += '<thead><tr><th>Category</th><th style="text-align:right;">Amount</th></tr></thead>';
+      html += '<tbody>';
+      html += '<tr><td>Living Expenses</td><td class="money">' + formatMoney(expenses.living) + '</td></tr>';
+      html += '<tr><td>Vacation</td><td class="money">' + formatMoney(expenses.vacation) + '</td></tr>';
+      html += '<tr><td>Medical</td><td class="money">' + formatMoney(expenses.medical) + '</td></tr>';
+      html += '<tr><td>Mortgage Payments (' + formatMoney(data.liabilities[0].monthly_payment) + '/mo)</td><td class="money">' + formatMoney(mortgageAnnual) + '</td></tr>';
+      html += '<tr class="total-row"><td>Total Annual Expenses</td><td class="money text-red">' + formatMoney(totalExpenses) + '</td></tr>';
+      html += '</tbody></table>';
+      html += '</div>';
+
+      // --- Recurring Large Expenses ---
+      html += '<div class="card" style="border-left-color: var(--accent-orange);">';
+      html += '<h2 class="text-orange">Recurring Large Expenses</h2>';
+      html += '<table class="data-table">';
+      html += '<thead><tr><th>Expense</th><th>Amount</th><th>Frequency</th><th style="text-align:right;">Next Occurrence</th></tr></thead>';
+      html += '<tbody>';
+
+      if (data.recurring_expenses) {
+        data.recurring_expenses.forEach(function(item) {
+          html += '<tr>';
+          html += '<td>' + item.name + '</td>';
+          html += '<td class="money">' + formatMoney(item.amount) + '</td>';
+          html += '<td>Every ' + item.frequency_years + ' year' + (item.frequency_years > 1 ? 's' : '') + '</td>';
+          html += '<td class="money">' + item.next_occurrence + '</td>';
+          html += '</tr>';
+        });
+      }
+
+      html += '</tbody></table>';
+      html += '</div>';
+
+      // --- Summary ---
+      var takeHome = 0;
+      data.household.people.forEach(function(p) { takeHome += (p.take_home_income || 0); });
+      var paycheckContributions = 0;
+      var manualContributions = 0;
+      data.accounts.forEach(function(account) {
+        if (account.type === 'checking') return;
+        var contrib = account.annual_contribution || 0;
+        var match = account.employer_match || 0;
+        if (account.type === '401k' || account.type === 'hsa') {
+          paycheckContributions += contrib + match;
+        } else {
+          manualContributions += contrib;
+        }
+      });
+      var totalSaving = paycheckContributions + manualContributions;
+      var netFlow = takeHome - manualContributions - totalExpenses;
+
+      html += '<div class="card summary">';
+      html += '<h2>Annual Cash Flow Summary</h2>';
+      html += '<div class="panels-grid" style="grid-template-columns: repeat(4, 1fr);">';
+
+      html += '<div style="text-align: center;">';
+      html += '<div class="hero-label">Take-Home Income</div>';
+      html += '<div class="money" style="font-size: 1.5rem; color: var(--accent-blue);">' + formatMoney(takeHome) + '</div>';
+      html += '</div>';
+
+      html += '<div style="text-align: center;">';
+      html += '<div class="hero-label">Total Saving</div>';
+      html += '<div class="money" style="font-size: 1.5rem; color: var(--accent-green);">' + formatMoney(totalSaving) + '</div>';
+      html += '<div class="text-muted" style="font-size: 0.8rem; margin-top: 4px;">Paycheck: ' + formatMoney(paycheckContributions) + '</div>';
+      html += '<div class="text-muted" style="font-size: 0.8rem;">Manual: ' + formatMoney(manualContributions) + '</div>';
+      html += '</div>';
+
+      html += '<div style="text-align: center;">';
+      html += '<div class="hero-label">Expenses</div>';
+      html += '<div class="money" style="font-size: 1.5rem; color: var(--accent-red);">' + formatMoney(totalExpenses) + '</div>';
+      html += '</div>';
+
+      html += '<div style="text-align: center;">';
+      html += '<div class="hero-label">Remaining</div>';
+      html += '<div class="money" style="font-size: 1.5rem; color: ' + (netFlow >= 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';">' + formatMoney(netFlow) + '</div>';
+      html += '</div>';
+
+      html += '</div>'; // end panels-grid
+      html += '</div>'; // end card
+
+      // --- Bar chart ---
+      html += '<div class="card">';
+      html += '<h2>Contributions vs Expenses</h2>';
+      html += '<div class="chart-container">';
+      html += '<canvas id="cashFlowChart"></canvas>';
+      html += '</div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+
+      // Destroy old chart
+      if (cashFlowChart) {
+        cashFlowChart.destroy();
+        cashFlowChart = null;
+      }
+
+      // Create bar chart
+      cashFlowChart = createBarChart('cashFlowChart',
+        ['Annual Cash Flow'],
+        [
+          {
+            label: 'Take-Home Income',
+            data: [takeHome],
+            backgroundColor: CHART_COLORS.blue,
+            borderColor: CHART_COLORS.blue,
+            borderWidth: 1,
+          },
+          {
+            label: 'Paycheck Savings (401k/HSA)',
+            data: [paycheckContributions],
+            backgroundColor: CHART_COLORS.teal,
+            borderColor: CHART_COLORS.teal,
+            borderWidth: 1,
+          },
+          {
+            label: 'Manual Savings (IRA/Brokerage)',
+            data: [manualContributions],
+            backgroundColor: CHART_COLORS.green,
+            borderColor: CHART_COLORS.green,
+            borderWidth: 1,
+          },
+          {
+            label: 'Expenses',
+            data: [totalExpenses],
+            backgroundColor: CHART_COLORS.red,
+            borderColor: CHART_COLORS.red,
+            borderWidth: 1,
+          },
+        ]
+      );
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

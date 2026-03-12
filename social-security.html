@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Social Security</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var people = data.household.people;
+      var settings = data.settings;
+
+      var html = '';
+      html += '<div class="page-header">';
+      html += '<h1>Social Security</h1>';
+      html += '<p>Benefit analysis and claiming strategy comparison</p>';
+      html += '</div>';
+
+      // Per-person panels
+      html += '<div class="panels-grid" style="grid-template-columns: repeat(2, 1fr);">';
+
+      people.forEach(function(person) {
+        if (!person.social_security) return;
+        var ss = person.social_security;
+        var retireAge = getRetirementAge(person, settings);
+        var retireYear = getRetirementYear(person, settings);
+
+        html += '<div class="card">';
+        html += '<h2 style="color: var(--accent-blue);">' + person.name + '</h2>';
+
+        // Benefits at 62, FRA (67), 70
+        html += '<table class="data-table">';
+        html += '<thead><tr><th>Claiming Age</th><th>Monthly</th><th style="text-align:right;">Annual</th></tr></thead>';
+        html += '<tbody>';
+
+        var ages = [
+          { age: 62, monthly: ss.early_benefit_62, label: '62 (Early)' },
+          { age: 67, monthly: ss.fra_benefit_monthly, label: '67 (FRA)' },
+          { age: 70, monthly: ss.delayed_benefit_70, label: '70 (Delayed)' },
+        ];
+
+        ages.forEach(function(row) {
+          var isChosen = row.age === ss.claiming_age;
+          var style = isChosen ? ' style="background: rgba(79, 195, 247, 0.1); font-weight: 600;"' : '';
+          var marker = isChosen ? ' *' : '';
+          html += '<tr' + style + '>';
+          html += '<td>' + row.label + (isChosen ? ' <span class="text-blue">(chosen)</span>' : '') + '</td>';
+          html += '<td class="money">' + formatMoney(row.monthly) + '</td>';
+          html += '<td class="money" style="text-align:right;">' + formatMoney(row.monthly * 12) + '</td>';
+          html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+
+        // Gap years
+        var ssStartYear = person.birth_year + ss.claiming_age;
+        var gapYears = ssStartYear - retireYear;
+        html += '<div style="margin-top: 16px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px;">';
+        html += '<div class="text-muted" style="font-size: 0.8rem; text-transform: uppercase;">Gap Years (Retirement to SS)</div>';
+        if (gapYears > 0) {
+          html += '<div style="font-size: 1.2rem; font-weight: 600; color: var(--accent-orange);">' + gapYears + ' years</div>';
+          html += '<div class="text-muted" style="font-size: 0.8rem;">Retire at ' + retireAge + ' (' + retireYear + ') — SS at ' + ss.claiming_age + ' (' + ssStartYear + ')</div>';
+        } else {
+          html += '<div style="font-size: 1.2rem; font-weight: 600; color: var(--accent-green);">None</div>';
+          html += '<div class="text-muted" style="font-size: 0.8rem;">SS starts at or before retirement</div>';
+        }
+        html += '</div>';
+
+        html += '</div>'; // end card
+      });
+
+      html += '</div>'; // end panels-grid
+
+      // Combined household income
+      html += '<div class="card" style="border-left-color: var(--accent-blue);">';
+      html += '<h2 class="text-blue">Combined Household Social Security</h2>';
+      html += '<p class="text-muted mb-16">At chosen claiming ages</p>';
+
+      var totalMonthly = 0;
+      var breakdownHtml = '';
+      people.forEach(function(person) {
+        if (!person.social_security) return;
+        var ss = person.social_security;
+        var monthly;
+        if (ss.claiming_age <= 62) monthly = ss.early_benefit_62;
+        else if (ss.claiming_age >= 70) monthly = ss.delayed_benefit_70;
+        else monthly = ss.fra_benefit_monthly;
+        totalMonthly += monthly;
+        breakdownHtml += '<div class="account-row">';
+        breakdownHtml += '<span class="account-name">' + person.name + ' (age ' + ss.claiming_age + ')</span>';
+        breakdownHtml += '<span class="account-balance text-blue">' + formatMoney(monthly) + '/mo</span>';
+        breakdownHtml += '</div>';
+      });
+
+      html += '<div style="text-align: center; margin-bottom: 16px;">';
+      html += '<div class="hero-label">Combined Monthly</div>';
+      html += '<div class="hero-number" style="color: var(--accent-blue);">' + formatMoney(totalMonthly) + '</div>';
+      html += '<div class="text-muted">(' + formatMoney(totalMonthly * 12) + ' annually)</div>';
+      html += '</div>';
+      html += breakdownHtml;
+      html += '</div>';
+
+      // Claiming age comparison table
+      html += '<div class="card">';
+      html += '<h2>Claiming Age Comparison</h2>';
+      html += '<p class="text-muted mb-16">Cumulative benefits at various claiming combinations</p>';
+
+      var combos = [
+        [62, 62], [62, 67], [62, 70],
+        [67, 62], [67, 67], [67, 70],
+        [70, 62], [70, 67], [70, 70],
+      ];
+
+      // Get person SS data
+      var p1 = people[0];
+      var p2 = people.length > 1 ? people[1] : null;
+
+      if (p1 && p1.social_security && p2 && p2.social_security) {
+        var ss1 = p1.social_security;
+        var ss2 = p2.social_security;
+
+        html += '<div style="overflow-x: auto;">';
+        html += '<table class="data-table">';
+        html += '<thead><tr>';
+        html += '<th>' + p1.name + ' Age</th>';
+        html += '<th>' + p2.name + ' Age</th>';
+        html += '<th>Combined Monthly</th>';
+        html += '<th>Combined Annual</th>';
+        html += '<th>Cumulative by 85</th>';
+        html += '<th style="text-align:right;">Cumulative by 90</th>';
+        html += '</tr></thead>';
+        html += '<tbody>';
+
+        combos.forEach(function(combo) {
+          var age1 = combo[0];
+          var age2 = combo[1];
+
+          // Get monthly benefit for each claiming age
+          var m1 = age1 <= 62 ? ss1.early_benefit_62 : (age1 >= 70 ? ss1.delayed_benefit_70 : ss1.fra_benefit_monthly);
+          var m2 = age2 <= 62 ? ss2.early_benefit_62 : (age2 >= 70 ? ss2.delayed_benefit_70 : ss2.fra_benefit_monthly);
+
+          var combinedMonthly = m1 + m2;
+          var combinedAnnual = combinedMonthly * 12;
+
+          // Cumulative: each person collects from their claiming age
+          // until age 85 or 90
+          function cumulative(targetAge) {
+            var years1 = Math.max(0, targetAge - age1);
+            var years2 = Math.max(0, targetAge - age2);
+            return (m1 * 12 * years1) + (m2 * 12 * years2);
+          }
+
+          var cum85 = cumulative(85);
+          var cum90 = cumulative(90);
+
+          var isChosen = age1 === ss1.claiming_age && age2 === ss2.claiming_age;
+          var rowStyle = isChosen ? ' style="background: rgba(79, 195, 247, 0.1); font-weight: 600;"' : '';
+
+          html += '<tr' + rowStyle + '>';
+          html += '<td>' + age1 + (isChosen ? ' <span class="text-blue">*</span>' : '') + '</td>';
+          html += '<td>' + age2 + (isChosen ? ' <span class="text-blue">*</span>' : '') + '</td>';
+          html += '<td class="money">' + formatMoney(combinedMonthly) + '</td>';
+          html += '<td class="money">' + formatMoney(combinedAnnual) + '</td>';
+          html += '<td class="money">' + formatMoney(cum85) + '</td>';
+          html += '<td class="money" style="text-align:right;">' + formatMoney(cum90) + '</td>';
+          html += '</tr>';
+        });
+
+        html += '</tbody></table>';
+        html += '</div>';
+        html += '<p class="text-muted mt-8" style="font-size: 0.8rem;">* Indicates currently chosen claiming age. All amounts in today\'s dollars (not inflation-adjusted).</p>';
+      }
+
+      html += '</div>';
+
+      container.innerHTML = html;
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

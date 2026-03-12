@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Milestones & Timeline</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var milestones = generateMilestones(data);
+      var people = data.household.people;
+
+      var html = '';
+      html += '<div class="page-header">';
+      html += '<h1>Milestones & Timeline</h1>';
+      html += '<p>Key financial and life events across your planning horizon</p>';
+      html += '</div>';
+
+      html += '<div class="card">';
+      html += '<div class="timeline">';
+
+      var lastDecade = null;
+
+      milestones.forEach(function(m) {
+        var decade = Math.floor(m.year / 10) * 10;
+        if (decade !== lastDecade) {
+          html += '<div style="padding: 16px 0 8px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 8px;">';
+          html += '<span style="font-family: var(--font-mono); font-size: 1.1rem; font-weight: 700; color: var(--accent-purple);">' + decade + 's</span>';
+          html += '</div>';
+          lastDecade = decade;
+        }
+
+        var isPast = m.year < CURRENT_YEAR;
+        var dimStyle = isPast ? ' opacity: 0.5;' : '';
+
+        // Map milestone type to CSS class
+        var typeClass = m.type || '';
+
+        html += '<div class="timeline-item ' + typeClass + '" style="' + dimStyle + '">';
+        html += '<div class="timeline-year">';
+
+        // Color the year by category
+        var yearColor = 'var(--text-muted)';
+        if (m.type === 'retirement') yearColor = 'var(--accent-green)';
+        else if (m.type === 'income') yearColor = 'var(--accent-blue)';
+        else if (m.type === 'tax') yearColor = 'var(--accent-orange)';
+        else if (m.type === 'age') yearColor = 'var(--accent-purple)';
+        else if (m.type === 'debt') yearColor = 'var(--accent-red)';
+        else if (m.type === 'expense') yearColor = 'var(--accent-yellow)';
+
+        html += '<strong style="color: ' + yearColor + ';">' + m.year + '</strong>';
+
+        // Show ages for each person
+        var ageInfo = [];
+        people.forEach(function(person) {
+          var age = getPersonAge(person, m.year);
+          if (age > 0 && age < 120) {
+            ageInfo.push(person.name + ': ' + age);
+          }
+        });
+        if (ageInfo.length > 0) {
+          html += ' <span style="color: var(--text-muted); font-size: 0.75rem;">(' + ageInfo.join(', ') + ')</span>';
+        }
+
+        html += '</div>';
+        html += '<div class="timeline-label">' + m.label + '</div>';
+        html += '</div>';
+      });
+
+      html += '</div>'; // end timeline
+      html += '</div>'; // end card
+
+      // Legend
+      html += '<div class="card" style="margin-top: 20px;">';
+      html += '<h3>Legend</h3>';
+      html += '<div style="display: flex; flex-wrap: wrap; gap: 20px; margin-top: 12px;">';
+      var legendItems = [
+        { color: 'var(--accent-green)', label: 'Retirement' },
+        { color: 'var(--accent-blue)', label: 'Income (Social Security)' },
+        { color: 'var(--accent-orange)', label: 'Tax (RMDs)' },
+        { color: 'var(--accent-purple)', label: 'Age Milestones' },
+        { color: 'var(--accent-red)', label: 'Debt' },
+        { color: 'var(--accent-yellow)', label: 'Expenses' },
+      ];
+      legendItems.forEach(function(item) {
+        html += '<div style="display: flex; align-items: center; gap: 8px;">';
+        html += '<span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ' + item.color + ';"></span>';
+        html += '<span style="font-size: 0.85rem; color: var(--text-secondary);">' + item.label + '</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

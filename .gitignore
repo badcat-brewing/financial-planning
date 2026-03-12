@@ -1,0 +1,15 @@
+# Personal financial data
+data.js
+
+# Development artifacts
+.superpowers/
+.claude/
+.playwright-mcp/
+node_modules/
+docs/superpowers/
+docs/fiduciary-reference.md
+docs/projections-data.md
+
+# OS / editor
+.DS_Store
+*.png

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Current Snapshot</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    var allocationChart = null;
+
+    function render(data, scenario) {
+      var cat = categorizeAccounts(data);
+      var container = document.getElementById('content');
+
+      var mortgage = data.liabilities && data.liabilities[0];
+      var mortgageProj = mortgage ? projectMortgage(mortgage, CURRENT_YEAR + 30) : null;
+      var payoffYear = getMortgagePayoffYear(mortgageProj);
+
+      var html = '';
+
+      // Page header
+      html += '<div class="page-header">';
+      html += '<h1>Current Snapshot</h1>';
+      html += '<p>Overview of your financial position today</p>';
+      html += '</div>';
+
+      // Net worth hero
+      html += '<div class="card" style="text-align: center; border-left-color: ' + (cat.netWorth >= 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';">';
+      html += '<div class="hero-label">Net Worth</div>';
+      html += '<div class="hero-number' + (cat.netWorth < 0 ? ' negative' : '') + '">' + formatMoney(cat.netWorth) + '</div>';
+      html += '</div>';
+
+      // 2x2 category cards grid
+      html += '<div class="panels-grid" style="grid-template-columns: repeat(2, 1fr);">';
+
+      // Liquid Assets card
+      html += '<div class="card" style="border-left-color: var(--accent-green);">';
+      html += '<h2 class="text-green">Liquid Assets</h2>';
+      html += '<div class="hero-label mb-8">' + formatMoney(cat.liquidTotal) + '</div>';
+      cat.liquid.forEach(function(a) {
+        html += '<div class="account-row">';
+        html += '<span class="account-name">' + a.name + '</span>';
+        html += '<span class="account-balance text-green">' + formatMoney(a.balance) + '</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      // Retirement Assets card
+      html += '<div class="card" style="border-left-color: var(--accent-purple);">';
+      html += '<h2 class="text-purple">Retirement Assets</h2>';
+      html += '<div class="hero-label mb-8">' + formatMoney(cat.retirementTotal) + '</div>';
+      cat.retirement.forEach(function(a) {
+        html += '<div class="account-row">';
+        html += '<div><span class="account-name">' + a.name + '</span>';
+        if (a.owner) {
+          html += '<span class="account-type">' + a.owner + '</span>';
+        }
+        html += '</div>';
+        html += '<span class="account-balance text-purple">' + formatMoney(a.balance) + '</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      // Physical Assets card — equity is what we actually own
+      html += '<div class="card" style="border-left-color: var(--accent-orange);">';
+      html += '<h2 class="text-orange">Physical Assets</h2>';
+      html += '<div class="hero-label mb-8">' + formatMoney(cat.homeEquity) + '</div>';
+      html += '<div class="account-row">';
+      html += '<span class="account-name">Home Value</span>';
+      html += '<span class="account-balance text-orange">' + formatMoney(data.home.current_value) + '</span>';
+      html += '</div>';
+      html += '<div class="account-row">';
+      html += '<span class="account-name">Home Equity</span>';
+      html += '<span class="account-balance text-orange">' + formatMoney(cat.homeEquity) + '</span>';
+      html += '</div>';
+      html += '</div>';
+
+      // Liabilities card
+      html += '<div class="card" style="border-left-color: var(--accent-red);">';
+      html += '<h2 class="text-red">Liabilities</h2>';
+      html += '<div class="hero-label mb-8">' + formatMoney(cat.liabilityTotal) + '</div>';
+      if (mortgage) {
+        html += '<div class="account-row">';
+        html += '<span class="account-name">Mortgage Balance</span>';
+        html += '<span class="account-balance text-red">' + formatMoney(mortgage.balance) + '</span>';
+        html += '</div>';
+        html += '<div class="account-row">';
+        html += '<span class="account-name">Monthly Payment</span>';
+        html += '<span class="account-balance text-red">' + formatMoney(mortgage.monthly_payment) + '</span>';
+        html += '</div>';
+        html += '<div class="account-row">';
+        html += '<span class="account-name">Interest Rate</span>';
+        html += '<span class="account-balance text-red">' + (mortgage.interest_rate * 100).toFixed(2) + '%</span>';
+        html += '</div>';
+        html += '<div class="account-row">';
+        html += '<span class="account-name">Payoff Year</span>';
+        html += '<span class="account-balance text-red">' + payoffYear + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+
+      html += '</div>'; // end panels-grid
+
+      // Asset Allocation donut chart
+      html += '<div class="card">';
+      html += '<h2>Asset Allocation</h2>';
+      html += '<div class="chart-container" style="max-height: 350px;">';
+      html += '<canvas id="allocationChart"></canvas>';
+      html += '</div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+
+      // Destroy old chart if exists
+      if (allocationChart) {
+        allocationChart.destroy();
+        allocationChart = null;
+      }
+
+      // Create donut chart
+      var labels = ['Liquid Assets', 'Retirement Assets', 'Home Equity'];
+      var values = [cat.liquidTotal, cat.retirementTotal, cat.homeEquity];
+      var colors = [CHART_COLORS.green, CHART_COLORS.purple, CHART_COLORS.orange];
+
+      allocationChart = createDoughnutChart('allocationChart', labels, values, colors);
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

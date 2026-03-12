@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Projections</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    var balanceChart = null;
+    var tableVisible = false;
+
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var people = data.household.people;
+      var settings = data.settings;
+
+      // Run the drawdown simulation — single source of truth
+      var result = simulateDrawdown(data, scenario);
+      var yearlyResults = result.yearlyResults;
+
+      // Mortgage/home for net worth
+      var oldestPerson = people.reduce(function(oldest, p) {
+        return p.birth_year < oldest.birth_year ? p : oldest;
+      }, people[0]);
+      var endYear = oldestPerson.birth_year + settings.projection_end_age;
+      var mortgage = data.liabilities && data.liabilities[0];
+      var mortgageProjection = mortgage ? projectMortgage(mortgage, endYear) : null;
+      var homeEquityProjection = mortgageProjection
+        ? projectHomeEquity(data.home, mortgageProjection, endYear)
+        : null;
+
+      // Retirement years for annotation
+      var retirementYears = [];
+      people.forEach(function(p) {
+        retirementYears.push({ name: p.name, year: getRetirementYear(p, settings) });
+      });
+
+      // Group accounts by type
+      var typeOrder = ['brokerage', 'hsa', '401k', 'traditional_ira', 'roth_ira', 'savings', 'checking'];
+      var typeColors = {
+        brokerage: CHART_COLORS.green,
+        hsa: CHART_COLORS.teal,
+        '401k': CHART_COLORS.purple,
+        traditional_ira: CHART_COLORS.orange,
+        roth_ira: CHART_COLORS.blue,
+        savings: CHART_COLORS.yellow,
+        checking: CHART_COLORS.pink,
+      };
+      var typeLabels = {
+        brokerage: 'Brokerage',
+        hsa: 'HSA',
+        '401k': '401k',
+        traditional_ira: 'Traditional IRA',
+        roth_ira: 'Roth IRA',
+        savings: 'Savings',
+        checking: 'Checking',
+      };
+
+      var typeGroups = {};
+      data.accounts.forEach(function(account) {
+        if (!typeGroups[account.type]) typeGroups[account.type] = [];
+        typeGroups[account.type].push(account.name);
+      });
+
+      // Chart labels and data
+      var chartLabels = yearlyResults.map(function(r) {
+        return r.year % 5 === 0 ? String(r.year) : '';
+      });
+
+      var areaDatasets = [];
+      typeOrder.forEach(function(type) {
+        if (!typeGroups[type]) return;
+        var accountNames = typeGroups[type];
+        var values = yearlyResults.map(function(r) {
+          var total = 0;
+          accountNames.forEach(function(name) {
+            total += (r.accountBalances[name] || 0);
+          });
+          return dd(total, r.year);
+        });
+        if (values.some(function(v) { return v > 0; })) {
+          areaDatasets.push({
+            label: typeLabels[type] || type,
+            data: values,
+            backgroundColor: typeColors[type] + '55',
+            borderColor: typeColors[type],
+            order: 1,
+          });
+        }
+      });
+
+      // Net worth line
+      var netWorthData = yearlyResults.map(function(r, idx) {
+        var nw = r.totalRemaining;
+        if (homeEquityProjection && mortgageProjection) {
+          nw += homeEquityProjection[idx].homeValue - mortgageProjection[idx].balance;
+        }
+        return dd(nw, r.year);
+      });
+
+      // Income & expense lines for secondary axis
+      var incomeData = yearlyResults.map(function(r) { return dd(r.totalIncome, r.year); });
+      var expenseData = yearlyResults.map(function(r) { return dd(r.totalCost, r.year); });
+      var secondaryDatasets = [
+        {
+          label: 'Income',
+          data: incomeData,
+          borderColor: CHART_COLORS.blue,
+          borderWidth: 3,
+          order: -2,
+        },
+        {
+          label: 'Expenses + Tax',
+          data: expenseData,
+          borderColor: CHART_COLORS.red,
+          borderWidth: 3,
+          order: -1,
+        },
+      ];
+
+      // --- HTML ---
+      var html = '';
+
+      var inflationRate = scenario.inflation;
+      // Helper: deflate to display dollars
+      function dd(amount, year) { return toDisplayDollars(amount, year, inflationRate); }
+
+      html += '<div class="page-header">';
+      html += '<h1>Portfolio Projections</h1>';
+      html += '<p>Projected balances through ' + endYear + ' (' + scenario.label + ' scenario)' + getDollarModeLabel() + ' — includes contributions, growth, expenses, and withdrawals</p>';
+      html += '</div>';
+
+      // Sustainability indicator
+      html += '<div class="card" style="text-align: center;">';
+      if (result.sustainable) {
+        html += '<div class="indicator positive">Portfolio sustains through age ' + settings.projection_end_age + '</div>';
+        html += '<div class="mt-12 text-muted">Estimated remaining balance: <span class="money text-green">' + formatMoney(dd(result.totalRemainingAtEnd, endYear)) + '</span></div>';
+      } else {
+        var depletionAge = result.depletionYear - people[0].birth_year;
+        html += '<div class="indicator negative">Portfolio may deplete by age ' + depletionAge + ' (' + result.depletionYear + ')</div>';
+      }
+      html += '</div>';
+
+      // Stacked area chart
+      html += '<div class="card">';
+      html += '<h2>Portfolio Balance Over Time</h2>';
+      html += '<div class="chart-container" style="max-height: 500px;">';
+      html += '<canvas id="balanceChart"></canvas>';
+      html += '</div>';
+
+      // Age timeline under chart
+      html += '<div style="overflow-x: auto; margin-top: 16px;">';
+      html += '<table class="data-table" style="font-size: 0.8rem;">';
+      html += '<thead><tr><th style="width: 80px;"></th>';
+      yearlyResults.forEach(function(r) {
+        if (r.year % 5 === 0) {
+          html += '<th style="text-align: center; padding: 4px 6px;">' + r.year + '</th>';
+        }
+      });
+      html += '</tr></thead><tbody>';
+
+      people.forEach(function(person) {
+        var retireAge = getRetirementAge(person, settings);
+        html += '<tr>';
+        html += '<td style="font-weight: 600; color: var(--text-primary);">' + person.name + '</td>';
+        yearlyResults.forEach(function(r) {
+          if (r.year % 5 === 0) {
+            var age = r.year - person.birth_year;
+            var isRetired = age >= retireAge;
+            var color = isRetired ? 'var(--accent-purple)' : 'var(--text-secondary)';
+            html += '<td style="text-align: center; padding: 4px 6px; color: ' + color + ';">' + age + '</td>';
+          }
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      html += '</div>';
+      html += '</div>';
+
+      // Toggle button for table
+      html += '<div class="mb-16">';
+      html += '<button class="toggle-btn' + (tableVisible ? ' active' : '') + '" id="tableToggle" onclick="toggleTable()">Show Year-by-Year Data</button>';
+      html += '</div>';
+
+      // Data table — every year through 2070
+      html += '<div id="projectionTable" class="' + (tableVisible ? '' : 'hidden') + '">';
+      html += '<div class="card">';
+      html += '<h2>Year-by-Year Balances & Cash Flow</h2>';
+      html += '<div style="overflow-x: auto; max-height: 80vh; overflow-y: auto;">';
+      html += '<table class="data-table" style="font-size: 0.82rem;">';
+      html += '<thead><tr>';
+      html += '<th>Year</th>';
+      html += '<th>Ages</th>';
+      typeOrder.forEach(function(type) {
+        if (!typeGroups[type]) return;
+        html += '<th style="text-align:right;">' + (typeLabels[type] || type) + '</th>';
+      });
+      html += '<th style="text-align:right;">Portfolio</th>';
+      html += '<th style="text-align:right;">Income</th>';
+      html += '<th style="text-align:right;">Expenses</th>';
+      html += '<th style="text-align:right;">Taxes</th>';
+      html += '<th style="text-align:right;">Healthcare</th>';
+      html += '<th style="text-align:right;">Big Expenses</th>';
+      html += '<th style="text-align:right;">Funded From</th>';
+      html += '</tr></thead>';
+      html += '<tbody>';
+
+      // Find actual payoff year from amortization (first year balance hits 0)
+      var payoffYear = null;
+      if (mortgageProjection) {
+        for (var mi = 1; mi < mortgageProjection.length; mi++) {
+          if (mortgageProjection[mi].balance <= 0) {
+            payoffYear = mortgageProjection[mi].year;
+            break;
+          }
+        }
+      }
+
+      yearlyResults.forEach(function(r, idx) {
+        if (r.year > 2070) return;
+
+        // Highlight milestone years
+        var isRetireYear = retirementYears.some(function(ry) { return ry.year === r.year; });
+        var isPayoffYear = payoffYear && r.year === payoffYear;
+        var rowBg = '';
+        if (isRetireYear) rowBg = 'background: rgba(124, 77, 255, 0.08);';
+        if (isPayoffYear) rowBg = 'background: rgba(102, 187, 106, 0.08);';
+        var rowStyle = rowBg ? ' style="' + rowBg + '"' : '';
+
+        html += '<tr' + rowStyle + '>';
+
+        // Year
+        html += '<td class="money">' + r.year;
+        if (isRetireYear) {
+          var who = retirementYears.filter(function(ry) { return ry.year === r.year; }).map(function(ry) { return ry.name; }).join(', ');
+          html += ' <span class="text-purple" style="font-size: 0.7rem;">(' + who + ' retires)</span>';
+        }
+        if (isPayoffYear) {
+          html += ' <span class="text-green" style="font-size: 0.7rem;">(mortgage paid off)</span>';
+        }
+        html += '</td>';
+
+        // Ages
+        html += '<td style="font-size: 0.78rem; white-space: nowrap;">';
+        people.forEach(function(p, pi) {
+          var age = r.year - p.birth_year;
+          var retired = isPersonRetired(p, settings, r.year);
+          if (pi > 0) html += ' / ';
+          html += '<span style="color: ' + (retired ? 'var(--accent-purple)' : 'var(--text-muted)') + ';">' + p.name.charAt(0) + ':' + age + '</span>';
+        });
+        html += '</td>';
+
+        // Account type balances
+        typeOrder.forEach(function(type) {
+          if (!typeGroups[type]) return;
+          var accountNames = typeGroups[type];
+          var total = 0;
+          accountNames.forEach(function(name) {
+            total += (r.accountBalances[name] || 0);
+          });
+          html += '<td class="money" style="text-align:right;">' + formatMoney(dd(total, r.year)) + '</td>';
+        });
+
+        // Portfolio total
+        html += '<td class="money text-green" style="text-align:right;">' + formatMoney(dd(r.totalRemaining, r.year)) + '</td>';
+
+        // Income
+        html += '<td class="money" style="text-align:right; color: var(--accent-blue);">' + formatMoney(dd(r.totalIncome, r.year)) + '</td>';
+
+        // Expenses
+        html += '<td class="money" style="text-align:right; color: var(--accent-red);">' + formatMoney(dd(r.totalExpenses, r.year)) + '</td>';
+
+        // Taxes
+        var taxColor = r.taxOwed > 0 ? 'var(--accent-orange)' : 'var(--text-muted)';
+        html += '<td class="money" style="text-align:right; color: ' + taxColor + ';">' + (r.taxOwed > 0 ? formatMoney(dd(r.taxOwed, r.year)) : '—') + '</td>';
+
+        // Healthcare
+        var hcLabel = formatMoney(dd(r.medicalExpense, r.year));
+        var hcColor = 'var(--text-muted)';
+        var hcNote = '';
+        if (r.preMedicare) {
+          hcColor = 'var(--accent-red)';
+          hcNote = '<div style="font-size: 0.65rem; color: var(--accent-red);">PRE-MEDICARE</div>';
+        } else if (r.allRetired) {
+          hcColor = 'var(--accent-orange)';
+        }
+        var hsaNote = r.hsaMedicalPaid > 0 ? '<div style="font-size: 0.65rem; color: var(--accent-teal);">HSA: ' + formatMoney(dd(r.hsaMedicalPaid, r.year)) + '</div>' : '';
+        html += '<td style="text-align:right; color: ' + hcColor + ';"><span class="money">' + hcLabel + '</span>' + hcNote + hsaNote + '</td>';
+
+        // Big recurring expenses hitting this year
+        var bigExpenses = [];
+        if (data.recurring_expenses) {
+          data.recurring_expenses.forEach(function(item) {
+            if (item.end_year && r.year > item.end_year) return;
+            var amount = item.amount;
+            var freq = item.frequency_years;
+            if (r.anyRetired && item.retirement_amount != null) amount = item.retirement_amount;
+            if (r.anyRetired && item.retirement_frequency_years != null) freq = item.retirement_frequency_years;
+            if (r.year >= item.next_occurrence) {
+              var yearsSinceFirst = r.year - item.next_occurrence;
+              if (yearsSinceFirst % freq === 0) {
+                if (item.inflation_adjusted) {
+                  var inflRate = scenario.inflation || 0.03;
+                  amount = amount * Math.pow(1 + inflRate, r.year - CURRENT_YEAR);
+                }
+                bigExpenses.push(item.name + ': ' + formatMoney(dd(amount, r.year)));
+              }
+            }
+          });
+        }
+        // Lump sum events
+        if (r.lumpSumEvents) {
+          r.lumpSumEvents.forEach(function(ev) {
+            var color = ev.type === 'income' ? 'color: var(--accent-blue);' : '';
+            var prefix = ev.type === 'income' ? '+' : '';
+            bigExpenses.push('<span style="' + color + '">' + ev.name + ': ' + prefix + formatMoney(dd(Math.abs(ev.amount), r.year)) + '</span>');
+          });
+        }
+        html += '<td style="text-align:right; font-size: 0.75rem; color: var(--accent-orange);">' + (bigExpenses.length > 0 ? bigExpenses.join('<br>') : '') + '</td>';
+
+        // Funded from (withdrawal sources)
+        var sources = [];
+        if (r.withdrawals) {
+          Object.keys(r.withdrawals).forEach(function(k) {
+            if (r.withdrawals[k] > 0) {
+              sources.push(k + ': ' + formatMoney(dd(r.withdrawals[k], r.year)));
+            }
+          });
+        }
+        var fundedFrom = sources.length > 0 ? sources.join(', ') : '<span class="text-muted">salary</span>';
+        html += '<td style="text-align:right; font-size: 0.75rem;">' + fundedFrom + '</td>';
+
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      html += '</div>';
+      html += '</div>';
+      html += '</div>';
+
+      container.innerHTML = html;
+
+      // Destroy old chart
+      if (balanceChart) { balanceChart.destroy(); balanceChart = null; }
+
+      // Create stacked area chart
+      balanceChart = createStackedAreaChart('balanceChart', chartLabels, areaDatasets, null, secondaryDatasets);
+    }
+
+    function toggleTable() {
+      tableVisible = !tableVisible;
+      var table = document.getElementById('projectionTable');
+      var btn = document.getElementById('tableToggle');
+      if (tableVisible) {
+        table.classList.remove('hidden');
+        btn.classList.add('active');
+        btn.textContent = 'Hide Year-by-Year Data';
+      } else {
+        table.classList.add('hidden');
+        btn.classList.remove('active');
+        btn.textContent = 'Show Year-by-Year Data';
+      }
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>

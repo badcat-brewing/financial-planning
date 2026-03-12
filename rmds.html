@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Financial Dashboard — Required Minimum Distributions</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <div class="main-content" id="content">
+    <p style="color: var(--text-muted);">Loading...</p>
+  </div>
+  <script src="data.js"></script>
+  <script src="js/data-loader.js"></script>
+  <script src="js/calculations.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/sidebar.js"></script>
+  <script>
+    var rmdBarChart = null;
+
+    function render(data, scenario) {
+      var container = document.getElementById('content');
+      var people = data.household.people;
+      var settings = data.settings;
+
+      var inflationRate = scenario.inflation;
+      function dd(amount, year) { return toDisplayDollars(amount, year, inflationRate); }
+
+      var html = '';
+      html += '<div class="page-header">';
+      html += '<h1>Required Minimum Distributions</h1>';
+      html += '<p>IRS-mandated withdrawals from tax-deferred retirement accounts' + getDollarModeLabel() + '</p>';
+      html += '</div>';
+
+      // Explainer
+      html += '<div class="explainer">';
+      html += '<strong>Required Minimum Distributions (RMDs)</strong> are mandatory withdrawals the IRS requires from traditional retirement accounts (401k, Traditional IRA) starting at age 75 (for those born 1960 or later). Each year you must withdraw a minimum amount based on your account balance and the IRS life expectancy factor. Roth IRAs and HSAs are NOT subject to RMDs.';
+      html += '</div>';
+
+      // Roth/HSA callout
+      html += '<div style="background: rgba(102, 187, 106, 0.08); border: 1px solid rgba(102, 187, 106, 0.2); border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">';
+      html += '<span style="color: var(--accent-green); font-size: 1.2rem;">&#10003;</span>';
+      html += '<span style="color: var(--text-secondary); font-size: 0.9rem;"><strong style="color: var(--accent-green);">Roth IRAs and HSAs have no RMDs</strong> — these accounts can continue to grow tax-free without forced withdrawals.</span>';
+      html += '</div>';
+
+      // Run full drawdown simulation — single source of truth
+      var result = simulateDrawdown(data, scenario);
+      var yearlyResults = result.yearlyResults;
+
+      // Collect per-person, per-account RMD data from simulation
+      var allRmdData = {}; // year -> { personName: amount }
+      var accountRmdRows = {}; // accountName -> [{ year, age, preBalance, divisor, rmd }]
+
+      yearlyResults.forEach(function(r) {
+        if (!r.rmdDetails || r.rmdDetails.length === 0) return;
+        r.rmdDetails.forEach(function(detail) {
+          // Per-account rows
+          if (!accountRmdRows[detail.accountName]) accountRmdRows[detail.accountName] = [];
+          accountRmdRows[detail.accountName].push({
+            year: r.year,
+            age: detail.age,
+            preBalance: detail.preBalance,
+            divisor: detail.divisor,
+            rmd: detail.rmd,
+          });
+          // Combined per-person totals
+          if (!allRmdData[r.year]) allRmdData[r.year] = {};
+          if (!allRmdData[r.year][detail.owner]) allRmdData[r.year][detail.owner] = 0;
+          allRmdData[r.year][detail.owner] += detail.rmd;
+        });
+      });
+
+      // Per-person RMD tables
+      people.forEach(function(person) {
+        var rmdAccounts = data.accounts.filter(function(a) {
+          return isRmdAccount(a.type) && a.owner === person.name;
+        });
+
+        if (rmdAccounts.length === 0) return;
+
+        var rmdStartAge = getRmdStartAge(person);
+        var rmdStartYear = person.birth_year + rmdStartAge;
+
+        html += '<div class="card" style="border-left-color: var(--accent-orange);">';
+        html += '<h2 style="color: var(--accent-orange);">' + person.name + ' — RMD Schedule</h2>';
+        html += '<p class="text-muted mb-8">RMDs begin at age ' + rmdStartAge + ' (' + rmdStartYear + ') — balances reflect actual drawdown simulation</p>';
+
+        rmdAccounts.forEach(function(account) {
+          var rows = accountRmdRows[account.name];
+          if (!rows || rows.length === 0) {
+            html += '<h3 class="mt-16">' + account.name + '</h3>';
+            html += '<p class="text-muted">Account depleted before RMDs begin.</p>';
+            return;
+          }
+
+          html += '<h3 class="mt-16">' + account.name + '</h3>';
+          html += '<div style="overflow-x: auto;">';
+          html += '<table class="data-table">';
+          html += '<thead><tr>';
+          html += '<th>Year</th><th>Age</th><th>Beginning Balance</th><th>IRS Factor</th><th style="text-align:right;">Required Withdrawal</th>';
+          html += '</tr></thead>';
+          html += '<tbody>';
+
+          rows.forEach(function(row) {
+            html += '<tr>';
+            html += '<td>' + row.year + '</td>';
+            html += '<td>' + row.age + '</td>';
+            html += '<td class="money">' + formatMoney(dd(row.preBalance, row.year)) + '</td>';
+            html += '<td>' + row.divisor.toFixed(1) + '</td>';
+            html += '<td class="money" style="text-align:right; color: var(--accent-orange);">' + formatMoney(dd(row.rmd, row.year)) + '</td>';
+            html += '</tr>';
+          });
+
+          html += '</tbody></table>';
+          html += '</div>';
+        });
+
+        html += '</div>'; // end card
+      });
+
+      // Combined RMDs bar chart
+      var rmdYears = Object.keys(allRmdData).map(Number).sort(function(a, b) { return a - b; });
+
+      if (rmdYears.length > 0) {
+        html += '<div class="card">';
+        html += '<h2>Combined RMDs by Year</h2>';
+        html += '<div class="chart-container" style="max-height: 400px;">';
+        html += '<canvas id="rmdBarChart"></canvas>';
+        html += '</div>';
+        html += '</div>';
+      }
+
+      container.innerHTML = html;
+
+      // Destroy old chart
+      if (rmdBarChart) {
+        rmdBarChart.destroy();
+        rmdBarChart = null;
+      }
+
+      // Build stacked bar chart
+      if (rmdYears.length > 0) {
+        var labels = rmdYears.map(String);
+        var personNames = [];
+        people.forEach(function(p) {
+          var hasRmds = rmdYears.some(function(y) { return allRmdData[y] && allRmdData[y][p.name]; });
+          if (hasRmds) personNames.push(p.name);
+        });
+
+        var colorMap = [CHART_COLORS.orange, CHART_COLORS.teal, CHART_COLORS.purple];
+        var datasets = personNames.map(function(name, i) {
+          return {
+            label: name,
+            data: rmdYears.map(function(y) { return dd((allRmdData[y] && allRmdData[y][name]) || 0, y); }),
+            backgroundColor: colorMap[i % colorMap.length],
+          };
+        });
+
+        rmdBarChart = createBarChart('rmdBarChart', labels, datasets, {
+          scales: {
+            x: { stacked: true },
+            y: { stacked: true },
+          },
+        });
+      }
+    }
+
+    function init() {
+      var data = loadData();
+      if (!data) return;
+      renderSidebar(data, render);
+      render(data, getScenario(data));
+    }
+
+    init();
+  </script>
+</body>
+</html>
